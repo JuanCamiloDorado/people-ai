@@ -15,6 +15,7 @@ import express from "express";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { assertAuthEnvReady } from "../auth";
+import { logStorageEnvStatus } from "../storage";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 
@@ -22,6 +23,14 @@ export function createApp() {
   // Antes que nada: sin un JWT_SECRET valido las sesiones se firmarian con cadena
   // vacia y cualquiera podria forjar una para cualquier usuario.
   assertAuthEnvReady();
+
+  // Deja constancia del estado del almacenamiento. A proposito NO aborta: sin el, el
+  // portal del candidato deja de funcionar, pero login, empresas y usuarios siguen
+  // sirviendo, y abortar tumbaria ademas el health check y dejaria a la plataforma
+  // reintentando el arranque en bucle. Existe porque el fallo anterior era mudo: las
+  // credenciales no estaban declaradas en render.yaml y nadie se entero hasta que un
+  // candidato intento subir un archivo.
+  logStorageEnvStatus();
 
   const app = express();
   const server = createServer(app);

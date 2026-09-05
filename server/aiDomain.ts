@@ -96,6 +96,10 @@ async function auditAi(companyId: number, userId: number | undefined, action: st
   if (db) await db.insert(auditLogs).values({ companyId, userId, action, module: "ai", result: "success", metadata: safeJson(metadata) });
 }
 
+// En modo "real" las URLs firmadas se generan con 900 s y no con el default de 300:
+// no las abre un navegador al instante, se las queda el proveedor de LLM y las
+// descarga cuando procesa la peticion. Implica que documentos personales salen hacia
+// un tercero; ver docs/PHASE_4A_VALIDATION.md antes de activarlo en produccion.
 export async function analyzeHiringDocuments(companyId: number, processId: number, userId: number, mode: "demo" | "real" = "demo") {
   const { db, process } = await ensureProcess(companyId, processId);
   const [requirements, documents] = await Promise.all([
@@ -103,7 +107,7 @@ export async function analyzeHiringDocuments(companyId: number, processId: numbe
     db.select().from(candidateDocuments).where(and(eq(candidateDocuments.companyId, companyId), eq(candidateDocuments.processId, processId), eq(candidateDocuments.status, "active"))),
   ]);
   const baseDocuments = documents.map(item => ({ id: item.id, originalName: item.originalName, normalizedName: item.normalizedName, mimeType: item.mimeType }));
-  const input: AiDocumentAnalysisInput = { candidateName: `candidate-${process.candidateId}`, positionName: `position-${process.positionId}`, requirements: requirements.map(item => ({ id: item.id, title: item.title, required: item.required })), documents: mode === "real" ? await Promise.all(baseDocuments.map(async document => ({ ...document, url: await storageGetSignedUrl(documents.find(item => item.id === document.id)!.fileKey) }))) : baseDocuments };
+  const input: AiDocumentAnalysisInput = { candidateName: `candidate-${process.candidateId}`, positionName: `position-${process.positionId}`, requirements: requirements.map(item => ({ id: item.id, title: item.title, required: item.required })), documents: mode === "real" ? await Promise.all(baseDocuments.map(async document => ({ ...document, url: await storageGetSignedUrl(documents.find(item => item.id === document.id)!.fileKey, 900) }))) : baseDocuments };
   const runInsert = await db.insert(aiAnalysisRuns).values({ companyId, processId, requestedByUserId: userId, providerMode: mode, status: "running" });
   const runId = Number(runInsert[0].insertId);
   try {

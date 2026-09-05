@@ -5,7 +5,7 @@ const { TEST_SECRET } = vi.hoisted(() => ({
 }));
 
 vi.mock("./_core/env", () => ({
-  ENV: { cookieSecret: TEST_SECRET, forgeApiUrl: "", forgeApiKey: "" },
+  ENV: { cookieSecret: TEST_SECRET, forgeApiUrl: "", forgeApiKey: "", storageEndpoint: "", storageRegion: "auto", storageBucket: "", storageAccessKeyId: "", storageSecretAccessKey: "", storageForcePathStyle: false },
 }));
 
 import { assertCanGrantRole, canGrantRole, INVITABLE_ROLES } from "./authorization";
