@@ -37,6 +37,17 @@ export const companies = mysqlTable("companies", {
   industry: varchar("industry", { length: 120 }),
   country: varchar("country", { length: 80 }).default("Colombia").notNull(),
   city: varchar("city", { length: 100 }),
+  // Contacto de soporte que el portal PUBLICA a los candidatos (tarjeta "Dudas con un
+  // documento?"). Vive aqui y no en `company_communication_settings` porque
+  // `getHiringDetail` ya trae esta fila entera: el portal lo obtiene sin una consulta
+  // extra. Esa tabla ademas no tiene telefono, y su `senderEmail` es el remitente de un
+  // correo saliente, no el buzon al que el candidato escribe.
+  //
+  // Nulos a proposito: null = "sin configurar" y el portal oculta la linea. Antes se
+  // fabricaba la direccion `talento@<empresa>.co`, un buzon que en general no existe.
+  // Longitudes pegadas a `employees.email` (320) y `employees.phone` (40).
+  candidateSupportEmail: varchar("candidateSupportEmail", { length: 320 }),
+  candidateSupportPhone: varchar("candidateSupportPhone", { length: 40 }),
   timezone: varchar("timezone", { length: 80 }).default("America/Bogota").notNull(),
   status: mysqlEnum("status", ["active", "suspended", "archived"]).default("active").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
