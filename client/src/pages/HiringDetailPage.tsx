@@ -28,6 +28,7 @@ import {
 import { useEffect, useState, useRef } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { CANDIDATE_EMAIL_SUBJECT, buildCandidateEmailText } from "@shared/candidateEmail";
 import CopyableLink from "@/components/CopyableLink";
 import { useCompanyId } from "@/hooks/useCompanyId";
 import { Input } from "@/components/ui/input";
@@ -1168,24 +1169,24 @@ export default function HiringDetailPage() {
                   Asunto
                 </p>
                 <p className="mt-1 rounded-lg bg-slate-50 p-3 text-slate-700">
-                  Documentación requerida para tu proceso de contratación
+                  {CANDIDATE_EMAIL_SUBJECT}
                 </p>
               </div>
               <div>
                 <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
                   Mensaje
                 </p>
-                <p className="mt-1 rounded-lg bg-slate-50 p-3 leading-6 text-slate-600">
-                  Hola {candidate?.fullName},<br />
-                  <br />
-                  Nos encontramos adelantando tu proceso de contratación para el cargo de{" "}
-                  {position?.name}.<br />
-                  <br />
-                  Completa cada documento desde el enlace seguro.<br />
-                  <br />
-                  Gracias,
-                  <br />
-                  Equipo de Talento Humano.
+                {/* El preview es el correo real, no una copia a mano: mismo `buildCandidateEmailText`
+                    que usa el servidor para armar el `mailto:`. Antes este bloque prometia "Completa
+                    cada documento desde el enlace seguro." y omitia la fecha limite, mientras al
+                    candidato le llegaba el enlace del portal. `whitespace-pre-line` respeta los saltos. */}
+                <p className="mt-1 whitespace-pre-line rounded-lg bg-slate-50 p-3 leading-6 text-slate-600">
+                  {buildCandidateEmailText({
+                    candidateName: candidate?.fullName,
+                    positionName: position?.name,
+                    documentDeadline: process.documentDeadline,
+                    portalUrl,
+                  })}
                 </p>
               </div>
               <div className="flex justify-end gap-2">
