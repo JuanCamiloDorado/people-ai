@@ -318,11 +318,58 @@ function ContextualAssistant({ companyId, processId }: { companyId: number; proc
   );
 }
 
+/** URL del portal guardada para una contratacion.
+ *
+ *  El token en crudo existe una sola vez, al generarlo (server/tokens.ts solo persiste
+ *  el hash), asi que si el cliente lo pierde no hay forma de recuperarlo: habria que
+ *  regenerar, y regenerar revoca el enlace que el candidato ya tiene. Guardarlo evita
+ *  ese callejon sin salida. Se guarda junto al `linkId` para poder comprobar despues
+ *  que sigue siendo el enlace vigente y no uno anterior.
+ *
+ *  `sessionStorage` y no `localStorage`: vive en la pestaña y muere al cerrarla. Es un
+ *  secreto de 7 dias, y en un equipo compartido no debe sobrevivir a la sesion. */
+type StoredPortalLink = { url: string; linkId: number };
+
+const portalLinkKey = (processId: number) => `people-ai:portal-link:${processId}`;
+
+/** Las tres envuelven el acceso en try/catch: leer o escribir `sessionStorage` lanza en
+ *  navegacion privada o con el almacenamiento del sitio bloqueado, y quedarse sin la URL
+ *  es un incordio menor -- que la pagina entera reviente por eso, no. */
+function readStoredPortalLink(processId: number): StoredPortalLink | null {
+  try {
+    const raw = sessionStorage.getItem(portalLinkKey(processId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredPortalLink;
+    return typeof parsed?.url === "string" && typeof parsed?.linkId === "number"
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPortalLink(processId: number, value: StoredPortalLink) {
+  try {
+    sessionStorage.setItem(portalLinkKey(processId), JSON.stringify(value));
+  } catch {
+    // Sin almacenamiento la URL sigue visible en esta pagina; solo se pierde al recargar.
+  }
+}
+
+function clearStoredPortalLink(processId: number) {
+  try {
+    sessionStorage.removeItem(portalLinkKey(processId));
+  } catch {
+    // Nada que limpiar si no hay almacenamiento.
+  }
+}
+
 export default function HiringDetailPage() {
   const [, params] = useRoute("/hr/contrataciones/:id");
   const processId = Number(params?.id || 0);
   const { companyId, ready } = useCompanyId();
-  const [link, setLink] = useState("");
+  const [storedLink, setStoredLink] = useState<StoredPortalLink | null>(null);
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
   const [activeDoc, setActiveDoc] = useState(0);
   const [composeOpen, setComposeOpen] = useState(false);
   const [editingFinding, setEditingFinding] = useState<number | null>(null);
@@ -372,10 +419,37 @@ export default function HiringDetailPage() {
   const generate = trpc.hiring.generateLink.useMutation({
     onSuccess: (data) => {
       const url = `${window.location.origin}/candidate/documents/${data.token}`;
-      setLink(url);
+      const stored = { url, linkId: data.linkId };
+      setStoredLink(stored);
+      writeStoredPortalLink(processId, stored);
+      // Sembrar la cache antes de invalidar, no solo invalidar.
+      //
+      // `portalUrl` exige que el linkId guardado coincida con el que reporta el
+      // servidor. Con solo invalidar, react-query conserva el dato anterior mientras
+      // refetchea: durante esos milisegundos el id guardado (el nuevo) no coincidiria
+      // con el de la cache (el viejo) y la tarjeta mostraria "la URL solo se muestra al
+      // generarla" justo despues de generarla. La mutacion ya devuelve la verdad, asi
+      // que se escribe y se invalida a continuacion para reconciliar con el servidor.
+      // `createdAt` es lo unico aproximado -- la columna es TIMESTAMP sin fraccion y
+      // solo alimenta un "Creado ..." -- y el refetch lo corrige acto seguido.
+      utils.hiring.linkState.setData(
+        { companyId, processId },
+        {
+          id: data.linkId,
+          status: "active",
+          createdAt: new Date(),
+          expiresAt: data.expiresAt,
+          lastUsedAt: null,
+        }
+      );
       utils.hiring.linkState.invalidate({ companyId, processId });
       toast.success("Enlace seguro generado");
     },
+    // Era la unica mutacion de la pagina sin onError: un fallo al generar no decia nada.
+    onError: (error) => toast.error(error.message),
+    // En onSettled y no en onSuccess: si falla, el dialogo tambien tiene que cerrarse o
+    // se queda encima del toast de error.
+    onSettled: () => setRegenerateOpen(false),
   });
   const prepareEmail = trpc.hiring.prepareEmail.useMutation({
     onSuccess: (data) => {
@@ -410,6 +484,10 @@ export default function HiringDetailPage() {
   });
   const revoke = trpc.hiring.revokeLink.useMutation({
     onSuccess: () => {
+      // Por higiene: dejar de mostrar la URL ya lo garantiza `portalUrl`, que exige que
+      // el servidor diga "active". Esto solo evita conservar un secreto muerto.
+      setStoredLink(null);
+      clearStoredPortalLink(processId);
       utils.hiring.linkState.invalidate({ companyId, processId });
       toast.success("Enlace revocado");
     },
@@ -454,6 +532,28 @@ export default function HiringDetailPage() {
     }
   }, [documentUrl.data]);
 
+  // Recupera la URL guardada al montar y cada vez que se cambia de contratacion.
+  //
+  // Va en un efecto con [processId] y no en el inicializador de useState porque wouter
+  // mantiene este componente montado al navegar de una contratacion a otra: un
+  // inicializador perezoso solo corre en el primer montaje y dejaria en pantalla la URL
+  // del proceso anterior.
+  useEffect(() => {
+    setStoredLink(readStoredPortalLink(processId));
+  }, [processId]);
+
+  // Escape cierra el dialogo de regeneracion. El foco inicial lo lleva "Cancelar" via
+  // autoFocus. Regenerar revoca el enlace que el candidato ya tiene, asi que ni un
+  // Escape ni un Enter reflejos deben acabar en la accion destructiva.
+  useEffect(() => {
+    if (!regenerateOpen) return;
+    const alCerrar = (evento: KeyboardEvent) => {
+      if (evento.key === "Escape") setRegenerateOpen(false);
+    };
+    document.addEventListener("keydown", alCerrar);
+    return () => document.removeEventListener("keydown", alCerrar);
+  }, [regenerateOpen]);
+
   if (detail.isLoading) {
     return (
       <DashboardLayout roleOverride="HR">
@@ -478,6 +578,21 @@ export default function HiringDetailPage() {
   ).length;
   const pending = requirements.length - received;
   const activeLink = Boolean(linkState.data && linkState.data.status === "active");
+  /** URL del portal que se puede mostrar ahora mismo, o cadena vacia.
+   *
+   *  El servidor decide si hay enlace que mostrar; sessionStorage solo aporta la cadena.
+   *  Antes la URL dependia solo de un useState que se perdia al recargar: la tarjeta
+   *  seguia diciendo "Activo" pero no habia forma de copiarla, y el unico boton que la
+   *  devolvia era "Regenerar", que revoca el enlace ya enviado al candidato. Ese era el
+   *  bug: para leer habia que destruir.
+   *
+   *  La comparacion por linkId cubre dos casos que `activeLink` por si solo no cubre:
+   *  otra pestaña que regenero por su cuenta, y el enlace revocado cuya URL seguia
+   *  visible y copiable porque `revoke.onSuccess` nunca limpiaba el estado. */
+  const portalUrl =
+    activeLink && storedLink && storedLink.linkId === linkState.data?.id
+      ? storedLink.url
+      : "";
   const sent = communications.data?.some((item) => item.status === "sent") || false;
   const submitted = process.status === "in_review" || process.status === "complete";
 
@@ -812,15 +927,19 @@ export default function HiringDetailPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     disabled={generate.isPending}
-                    onClick={() => generate.mutate({ companyId, processId })}
+                    onClick={() =>
+                      activeLink
+                        ? setRegenerateOpen(true)
+                        : generate.mutate({ companyId, processId })
+                    }
                     className="bg-slate-950 text-white"
                   >
                     {activeLink ? "Regenerar enlace" : "Generar enlace"}
                   </Button>
-                  {link && (
+                  {portalUrl && (
                     <Button
                       variant="outline"
-                      onClick={() => window.open(link, "_blank", "noopener,noreferrer")}
+                      onClick={() => window.open(portalUrl, "_blank", "noopener,noreferrer")}
                     >
                       Abrir portal
                     </Button>
@@ -835,9 +954,14 @@ export default function HiringDetailPage() {
                     </Button>
                   )}
                 </div>
-                {link && (
-                  <CopyableLink value={link} />
-                )}
+                {portalUrl ? (
+                  <CopyableLink value={portalUrl} />
+                ) : activeLink ? (
+                  <p className="text-xs leading-5 text-slate-500">
+                    Por seguridad la URL solo se muestra al generarla. Si la perdiste,
+                    regenera el enlace y envía el nuevo al candidato.
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
 
@@ -856,7 +980,7 @@ export default function HiringDetailPage() {
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button
-                    disabled={prepareEmail.isPending || !activeLink}
+                    disabled={prepareEmail.isPending || !portalUrl}
                     onClick={() => setComposeOpen(true)}
                   >
                     <Mail className="mr-1 h-4 w-4" />
@@ -864,9 +988,9 @@ export default function HiringDetailPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    disabled={prepareReminder.isPending || !activeLink || pending === 0 || !link}
+                    disabled={prepareReminder.isPending || pending === 0 || !portalUrl}
                     onClick={() =>
-                      prepareReminder.mutate({ companyId, processId, portalUrl: link })
+                      prepareReminder.mutate({ companyId, processId, portalUrl })
                     }
                   >
                     <Bell className="mr-1 h-4 w-4" />
@@ -890,10 +1014,10 @@ export default function HiringDetailPage() {
                           companyId,
                           processId,
                           type: preparedEmail.type,
-                          portalUrl: link,
+                          portalUrl,
                         })
                       }
-                      disabled={markSent.isPending || !link}
+                      disabled={markSent.isPending || !portalUrl}
                     >
                       Marcar como enviado
                     </Button>
@@ -969,6 +1093,41 @@ export default function HiringDetailPage() {
         </Card>
       </div>
 
+      {regenerateOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="regenerar-enlace-title"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">
+              Confirmación requerida
+            </p>
+            <h2
+              id="regenerar-enlace-title"
+              className="mt-2 text-lg font-semibold text-slate-950"
+            >
+              ¿Regenerar el enlace del candidato?
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              El enlace que ya enviaste dejará de funcionar de inmediato. Si el candidato
+              lo abre, verá que no está disponible. Tendrás que enviarle el nuevo.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button autoFocus variant="outline" onClick={() => setRegenerateOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                disabled={generate.isPending}
+                onClick={() => generate.mutate({ companyId, processId })}
+              >
+                Regenerar e invalidar el anterior
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {composeOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"
@@ -1034,9 +1193,9 @@ export default function HiringDetailPage() {
                   Cancelar
                 </Button>
                 <Button
-                  disabled={prepareEmail.isPending || !link}
+                  disabled={prepareEmail.isPending || !portalUrl}
                   onClick={() =>
-                    prepareEmail.mutate({ companyId, processId, portalUrl: link })
+                    prepareEmail.mutate({ companyId, processId, portalUrl })
                   }
                 >
                   <Mail className="mr-2 h-4 w-4" />
