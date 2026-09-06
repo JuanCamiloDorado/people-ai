@@ -231,6 +231,40 @@ export async function createTemplate(companyId: number, name: string, items: Arr
   await audit(companyId, "document_template_created", { templateId, positionId, name }, userId);
   return getTemplate(companyId, templateId);
 }
+export async function syncActiveProcessesWithTemplate(
+  companyId: number,
+  templateId: number,
+  items: Array<{ title: string; description?: string; required: boolean; sortOrder: number; allowedMimeTypes?: string }>
+) {
+  const db = await getDb();
+  if (!db) return;
+  const activeProcesses = await db.select().from(hiringProcesses).where(and(
+    eq(hiringProcesses.companyId, companyId),
+    eq(hiringProcesses.templateId, templateId),
+    inArray(hiringProcesses.status, ["draft", "pending", "in_progress"])
+  ));
+  for (const proc of activeProcesses) {
+    const reqs = await db.select().from(hiringRequirements).where(and(
+      eq(hiringRequirements.companyId, companyId),
+      eq(hiringRequirements.processId, proc.id)
+    ));
+    for (const req of reqs) {
+      const match = items.find(i => i.title && i.title.trim().toLowerCase() === req.title.trim().toLowerCase())
+        || items.find(i => i.sortOrder === req.sortOrder);
+      if (match) {
+        await db.update(hiringRequirements).set({
+          allowedMimeTypes: match.allowedMimeTypes || "application/pdf,image/jpeg,image/png,image/webp",
+          description: match.description || null,
+          required: match.required,
+        }).where(and(
+          eq(hiringRequirements.companyId, companyId),
+          eq(hiringRequirements.id, req.id)
+        ));
+      }
+    }
+  }
+}
+
 export async function updateTemplate(companyId: number, templateId: number, items: Array<{ title: string; description?: string; required: boolean; sortOrder: number; allowedMimeTypes?: string }>, userId?: number) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -245,6 +279,7 @@ export async function updateTemplate(companyId: number, templateId: number, item
       templateId,
     })));
   }
+  await syncActiveProcessesWithTemplate(companyId, templateId, items);
   await audit(companyId, "document_template_updated", { templateId }, userId);
   return getTemplate(companyId, templateId);
 }
@@ -256,7 +291,7 @@ export async function getMasterStandardTemplate(companyId: number) {
     eq(documentTemplates.companyId, companyId),
     eq(documentTemplates.name, DEFAULT_TEMPLATE_NAME),
     eq(documentTemplates.status, "active")
-  )).orderBy(desc(documentTemplates.updatedAt)).limit(1))[0];
+  )).orderBy(asc(documentTemplates.positionId), desc(documentTemplates.updatedAt)).limit(1))[0];
 
   if (!standardTemplate) {
     return { items: DEFAULT_STANDARD_DOCUMENTS };
@@ -299,7 +334,7 @@ export async function updateMasterStandardTemplate(
     eq(documentTemplates.companyId, companyId),
     eq(documentTemplates.name, DEFAULT_TEMPLATE_NAME),
     eq(documentTemplates.status, "active")
-  ));
+  )).orderBy(asc(documentTemplates.positionId), desc(documentTemplates.updatedAt));
 
   if (standardTemplates.length > 0) {
     const targetTemplates = applyToAllPositions ? standardTemplates : [standardTemplates[0]];
@@ -320,6 +355,7 @@ export async function updateMasterStandardTemplate(
         );
       }
       await db.update(documentTemplates).set({ updatedAt: new Date() }).where(eq(documentTemplates.id, t.id));
+      await syncActiveProcessesWithTemplate(companyId, t.id, items);
     }
   } else {
     const res = await db.insert(documentTemplates).values({
@@ -340,6 +376,7 @@ export async function updateMasterStandardTemplate(
         }))
       );
     }
+    await syncActiveProcessesWithTemplate(companyId, tId, items);
   }
 
   await audit(companyId, "master_standard_template_updated", { count: items.length, applyToAllPositions }, userId);
@@ -470,7 +507,57 @@ export async function updateHiringDeadline(companyId: number, processId: number,
   await audit(companyId, "hiring_process_deadline_updated", { processId, documentDeadline: deadlineDate }, userId);
   return getHiringDetail(companyId, processId);
 }
-export async function getHiringDetail(companyId: number, processId: number) { const db = await getDb(); if (!db) return null; const process = (await db.select().from(hiringProcesses).where(and(eq(hiringProcesses.companyId, companyId), eq(hiringProcesses.id, processId))).limit(1))[0]; if (!process) return null; const candidate = (await db.select().from(candidateProfiles).where(and(eq(candidateProfiles.companyId, companyId), eq(candidateProfiles.id, process.candidateId))).limit(1))[0]; const position = (await db.select().from(jobPositions).where(and(eq(jobPositions.companyId, companyId), eq(jobPositions.id, process.positionId))).limit(1))[0]; const company = (await db.select().from(companies).where(eq(companies.id, companyId)).limit(1))[0]; const requirements = await db.select().from(hiringRequirements).where(and(eq(hiringRequirements.companyId, companyId), eq(hiringRequirements.processId, processId))).orderBy(asc(hiringRequirements.sortOrder)); const documents = await db.select().from(candidateDocuments).where(and(eq(candidateDocuments.companyId, companyId), eq(candidateDocuments.processId, processId), eq(candidateDocuments.status, "active"))); return { process, candidate, position, company, requirements, documents }; }
+export async function getHiringDetail(companyId: number, processId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const process = (await db.select().from(hiringProcesses).where(and(eq(hiringProcesses.companyId, companyId), eq(hiringProcesses.id, processId))).limit(1))[0];
+  if (!process) return null;
+  const candidate = (await db.select().from(candidateProfiles).where(and(eq(candidateProfiles.companyId, companyId), eq(candidateProfiles.id, process.candidateId))).limit(1))[0];
+  const position = (await db.select().from(jobPositions).where(and(eq(jobPositions.companyId, companyId), eq(jobPositions.id, process.positionId))).limit(1))[0];
+  const company = (await db.select().from(companies).where(eq(companies.id, companyId)).limit(1))[0];
+  const requirements = await db.select().from(hiringRequirements).where(and(eq(hiringRequirements.companyId, companyId), eq(hiringRequirements.processId, processId))).orderBy(asc(hiringRequirements.sortOrder));
+  const documents = await db.select().from(candidateDocuments).where(and(eq(candidateDocuments.companyId, companyId), eq(candidateDocuments.processId, processId), eq(candidateDocuments.status, "active")));
+
+  // Si el proceso de contratacion esta activo (candidato en fase de carga), sincronizamos requisitos con la plantilla vigente
+  if (requirements.length > 0 && process.templateId && ["draft", "pending", "in_progress"].includes(process.status)) {
+    let templateItems = await db.select().from(documentTemplateItems).where(and(
+      eq(documentTemplateItems.companyId, companyId),
+      eq(documentTemplateItems.templateId, process.templateId)
+    )).orderBy(asc(documentTemplateItems.sortOrder));
+
+    if (templateItems.length === 0) {
+      const master = await getMasterStandardTemplate(companyId);
+      if (master?.items?.length) {
+        templateItems = master.items as any;
+      }
+    }
+
+    if (templateItems.length > 0) {
+      for (const req of requirements) {
+        const match = templateItems.find((t: any) => t.id && t.id === req.sourceTemplateItemId)
+          || templateItems.find((t: any) => t.title && t.title.trim().toLowerCase() === req.title.trim().toLowerCase())
+          || templateItems.find((t: any) => t.sortOrder === req.sortOrder);
+        if (match) {
+          const targetMime = match.allowedMimeTypes || "application/pdf,image/jpeg,image/png,image/webp";
+          const targetDesc = match.description || null;
+          if (req.allowedMimeTypes !== targetMime || (req.description || null) !== targetDesc) {
+            await db.update(hiringRequirements).set({
+              allowedMimeTypes: targetMime,
+              description: targetDesc,
+            }).where(and(
+              eq(hiringRequirements.companyId, companyId),
+              eq(hiringRequirements.id, req.id)
+            ));
+            req.allowedMimeTypes = targetMime;
+            req.description = targetDesc;
+          }
+        }
+      }
+    }
+  }
+
+  return { process, candidate, position, company, requirements, documents };
+}
 export async function updateRequirement(companyId: number, processId: number, requirementId: number, patch: { title?: string; required?: boolean; status?: "pending" | "uploaded" | "replaced" | "removed" | "verified" }, userId?: number) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); await db.update(hiringRequirements).set(patch).where(and(eq(hiringRequirements.companyId, companyId), eq(hiringRequirements.processId, processId), eq(hiringRequirements.id, requirementId))); await audit(companyId, "hiring_requirement_updated", { processId, requirementId }, userId); return getHiringDetail(companyId, processId); }
 export async function generateLink(companyId: number, processId: number, userId?: number) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const detail = await getHiringDetail(companyId, processId); if (!detail) throw new Error("Hiring process not found"); await db.update(candidateAccessLinks).set({ status: "revoked", revokedAt: new Date() }).where(and(eq(candidateAccessLinks.companyId, companyId), eq(candidateAccessLinks.processId, processId), eq(candidateAccessLinks.status, "active"))); const token = randomBytes(32).toString("base64url"); await db.insert(candidateAccessLinks).values({ companyId, processId, candidateId: detail.process.candidateId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 7 * 86400000) }); await audit(companyId, "candidate_link_generated", { processId }, userId); await activity(companyId, processId, "link_generated", "analyst", userId); return { token, expiresAt: new Date(Date.now() + 7 * 86400000) }; }
 export async function getPortal(token: string, recordActivity = true) { const db = await getDb(); if (!db) return null; const link = (await db.select().from(candidateAccessLinks).where(eq(candidateAccessLinks.tokenHash, hashToken(token))).limit(1))[0]; if (!link) return null; if (!isLinkUsable(link.status, link.expiresAt)) { if (link.status === "active" && link.expiresAt.getTime() < Date.now()) { await audit(link.companyId, "candidate_link_expired", { processId: link.processId, linkId: link.id }); await activity(link.companyId, link.processId, "link_expired", "system", undefined, { linkId: link.id }); } return null; } await db.update(candidateAccessLinks).set({ lastUsedAt: new Date() }).where(eq(candidateAccessLinks.id, link.id)); const detail = await getHiringDetail(link.companyId, link.processId); if (detail && recordActivity) { await activity(link.companyId, link.processId, "link_opened", "candidate"); await audit(link.companyId, "candidate_link_opened", { processId: link.processId, linkId: link.id }); } return detail ? { ...detail, linkId: link.id, expiresAt: link.expiresAt } : null; }

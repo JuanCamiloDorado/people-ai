@@ -65,15 +65,23 @@ describe("Fases 2 y 3 — seguridad y documentos", () => {
     expect(master.items.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("permite actualizar la plantilla estándar maestra de la empresa", async () => {
+  it("permite actualizar la plantilla estándar maestra de la empresa preservando tipos de archivo permitidos", async () => {
     const { updateMasterStandardTemplate } = await import("./hrDomain");
     const newItems = [
-      { title: "Cédula de Ciudadanía", description: "PDF legible", required: true, sortOrder: 1 },
-      { title: "Hoja de Vida", description: "Formato actualizado", required: true, sortOrder: 2 },
+      { title: "Cédula de Ciudadanía", description: "PDF legible", required: true, sortOrder: 1, allowedMimeTypes: "application/pdf" },
+      { title: "Hoja de Vida", description: "Formato actualizado", required: true, sortOrder: 2, allowedMimeTypes: "application/pdf,image/jpeg,image/png,image/webp" },
     ];
     const updated = await updateMasterStandardTemplate(4, newItems);
     expect(updated.items.length).toBe(2);
     expect(updated.items[0].title).toBe("Cédula de Ciudadanía");
+    expect(updated.items[0].allowedMimeTypes).toBe("application/pdf");
+    expect(updated.items[1].allowedMimeTypes).toBe("application/pdf,image/jpeg,image/png,image/webp");
+  });
+
+  it("exporta y ejecuta la sincronización de procesos activos con plantillas", async () => {
+    const { syncActiveProcessesWithTemplate } = await import("./hrDomain");
+    expect(typeof syncActiveProcessesWithTemplate).toBe("function");
+    await expect(syncActiveProcessesWithTemplate(4, 999, [])).resolves.not.toThrow();
   });
 
   it("permite ejecutar el flujo de creación y eliminación de un cargo", async () => {
