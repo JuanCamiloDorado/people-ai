@@ -159,28 +159,31 @@ export default function HiringPage() {
 
         {/* Contacto de soporte del portal. Vive en esta pestana y no en una pagina de
             ajustes porque es exactamente lo que el candidato ve al abrir el enlace que se
-            genera aqui: quien crea el proceso tiene que poder comprobarlo de un vistazo. */}
-        <Card>
-          <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="text-base">Contacto de soporte del portal</CardTitle>
-              <p className="mt-1 text-sm text-slate-500">
-                El correo y el teléfono que ve el candidato para resolver dudas sobre sus documentos.
-              </p>
+            genera aqui: quien crea el proceso tiene que poder comprobarlo de un vistazo.
+
+            Sin `CardHeader`: en este shadcn es un `grid`, no un flex, asi que
+            `sm:flex-row sm:justify-between` no aplicaba -- el `display` seguia siendo grid
+            -- y el boton caia en una fila propia a lo ancho de la tarjeta. La accion va
+            junto a los valores en un solo `CardContent` en flex, y la explicacion larga
+            vive en el dialogo, que es donde de verdad hace falta. */}
+        <Card className="py-4">
+          <CardContent className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-900">Contacto de soporte del portal</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-slate-500">
+                <span className="flex items-center gap-1.5">
+                  <Mail className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  {contacto.data?.candidateSupportEmail || <span className="text-slate-400">Sin configurar</span>}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  {contacto.data?.candidateSupportPhone || <span className="text-slate-400">Sin configurar</span>}
+                </span>
+              </div>
             </div>
-            <Button type="button" variant="outline" onClick={abrirContacto} disabled={!ready}>
+            <Button type="button" variant="outline" size="sm" onClick={abrirContacto} disabled={!ready}>
               Editar contacto
             </Button>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2 text-sm sm:flex-row sm:gap-8">
-            <span className="flex items-center gap-2">
-              <Mail className="h-4 w-4 text-slate-400" />
-              {contacto.data?.candidateSupportEmail || <span className="text-slate-400">Sin configurar</span>}
-            </span>
-            <span className="flex items-center gap-2">
-              <Phone className="h-4 w-4 text-slate-400" />
-              {contacto.data?.candidateSupportPhone || <span className="text-slate-400">Sin configurar</span>}
-            </span>
           </CardContent>
         </Card>
 
