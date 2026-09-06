@@ -14,9 +14,11 @@ import {
   Mail,
   Phone,
   ArrowLeft,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { CandidatePortalSkeleton } from "@/components/CandidatePortalSkeleton";
 import {
   DEFAULT_ALLOWED_MIMETYPES,
   formatAllowedExtensions,
@@ -337,7 +339,46 @@ export default function CandidatePortalPage() {
     submitMutation.mutate({ token });
   };
 
-  if (!token || portal.error || !portal.data) {
+  // 1. Estado de carga: mientras se consulta la información del portal
+  const isLoadingPortal =
+    token.length >= 20 &&
+    (portal.isLoading || (portal.isPending && !portal.data));
+
+  if (isLoadingPortal) {
+    return <CandidatePortalSkeleton />;
+  }
+
+  // 2. Error del servidor o de red: no confundir una falla temporal de conexión con un enlace expirado
+  if (portal.error) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#f8fafd] p-6 font-['Schibsted_Grotesk',sans-serif]">
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-lg">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+            <AlertCircle className="h-7 w-7 text-amber-600" />
+          </div>
+          <h1 className="mt-5 text-xl font-bold tracking-tight text-slate-900">
+            No pudimos cargar la información
+          </h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-500">
+            Hubo un problema al conectar con el servidor. El enlace puede seguir siendo válido.
+          </p>
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              onClick={() => portal.refetch()}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#0144a0] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#01326f] transition-all cursor-pointer"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Reintentar
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // 3. Enlace no disponible / expirado / token inválido
+  if (!token || token.length < 20 || !portal.data) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#f8fafd] p-6 font-['Schibsted_Grotesk',sans-serif]">
         <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-lg">
