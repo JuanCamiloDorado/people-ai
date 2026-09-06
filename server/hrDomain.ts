@@ -482,7 +482,7 @@ export async function createHiring(companyId: number, userId: number, input: { f
       process: { id: 999, companyId, candidateId: 888, positionId: input.positionId, templateId: input.templateId, createdByUserId: userId, status: "pending" as const, documentDeadline: deadlineDate, createdAt: new Date(), updatedAt: new Date() },
       candidate: { id: 888, companyId, fullName: input.fullName, identificationNumber: input.identificationNumber, email: input.email, createdAt: new Date() },
       position: { id: input.positionId, companyId, templateId: input.templateId, name: "Cargo", description: null, status: "active" as const, createdAt: new Date(), updatedAt: new Date() },
-      company: { id: companyId, name: "Empresa", legalName: "Empresa S.A.S.", logo: null, industry: null, country: "Colombia", city: null, timezone: "America/Bogota", status: "active" as const, createdAt: new Date(), updatedAt: new Date() },
+      company: { id: companyId, name: "Empresa", legalName: "Empresa S.A.S.", logo: null, industry: null, country: "Colombia", city: null, candidateSupportEmail: null, candidateSupportPhone: null, timezone: "America/Bogota", status: "active" as const, createdAt: new Date(), updatedAt: new Date() },
       requirements: [],
       documents: [],
     };
@@ -683,6 +683,30 @@ export async function updateRequirement(companyId: number, processId: number, re
  *  id no podria saber si lo que guardo pertenece al enlace vigente o a uno anterior,
  *  y acabaria ofreciendo para copiar una URL ya muerta. */
 export async function generateLink(companyId: number, processId: number, userId?: number) { const db = await getDb(); if (!db) throw new Error("Database unavailable"); const detail = await getHiringDetail(companyId, processId); if (!detail) throw new Error("Hiring process not found"); await db.update(candidateAccessLinks).set({ status: "revoked", revokedAt: new Date() }).where(and(eq(candidateAccessLinks.companyId, companyId), eq(candidateAccessLinks.processId, processId), eq(candidateAccessLinks.status, "active"))); const token = randomBytes(32).toString("base64url"); const expiresAt = new Date(Date.now() + 7 * 86400000); const [inserted] = await db.insert(candidateAccessLinks).values({ companyId, processId, candidateId: detail.process.candidateId, tokenHash: hashToken(token), expiresAt }); await audit(companyId, "candidate_link_generated", { processId }, userId); await activity(companyId, processId, "link_generated", "analyst", userId); return { token, expiresAt, linkId: inserted.insertId }; }
+/** Proyeccion publica de la empresa para el portal del candidato.
+ *
+ *  `getHiringDetail` hace `select()` sin proyeccion, asi que hasta ahora la fila ENTERA de
+ *  `companies` viajaba a `candidatePortal.get`, que es `publicProcedure` y solo esta
+ *  autorizada por un token opaco: legalName, industry, city, timezone, status y las fechas
+ *  incluidas.
+ *
+ *  Lo grave no era lo que se filtraba, sino que el limite fuese allow-by-default: la
+ *  proxima columna que alguien anada a `companies` -- un NIT, un correo de facturacion --
+ *  aparecia en una respuesta sin sesion el mismo dia, sin que ningun test ni el compilador
+ *  dijeran nada. Con la lista explicita hay que anadirla AQUI a proposito para exponerla.
+ *
+ *  No se hace dentro de `getHiringDetail` porque esa funcion sirve tambien a
+ *  `hiring.detail` (autenticado, con assertRole + assertCompanyScope) y a
+ *  `buildCandidateEmail`, donde estrecharla no compra nada. */
+const companyForPortal = (company: typeof companies.$inferSelect | undefined) =>
+  company
+    ? {
+        id: company.id,
+        name: company.name,
+        candidateSupportEmail: company.candidateSupportEmail,
+        candidateSupportPhone: company.candidateSupportPhone,
+      }
+    : null;
 /** Resuelve el portal del candidato a partir de su token.
  *
  *  Lanza -- en vez de devolver null -- cuando no hay base de datos. Antes ambos casos
@@ -695,7 +719,7 @@ export async function generateLink(companyId: number, processId: number, userId?
  *  El mensaje es neutro a proposito y por eso no se usa `requireDb()`: el suyo nombra
  *  DATABASE_URL y habla de "autenticar", y tRPC entrega `message` al cliente incluso en
  *  produccion -- esta procedure es publica y la lee un candidato. */
-export async function getPortal(token: string, recordActivity = true) { const db = await getDb(); if (!db) throw new Error("No pudimos verificar el enlace en este momento. Intenta de nuevo en unos minutos."); const link = (await db.select().from(candidateAccessLinks).where(eq(candidateAccessLinks.tokenHash, hashToken(token))).limit(1))[0]; if (!link) return null; if (!isLinkUsable(link.status, link.expiresAt)) { if (link.status === "active" && link.expiresAt.getTime() < Date.now()) { await audit(link.companyId, "candidate_link_expired", { processId: link.processId, linkId: link.id }); await activity(link.companyId, link.processId, "link_expired", "system", undefined, { linkId: link.id }); } return null; } await db.update(candidateAccessLinks).set({ lastUsedAt: new Date() }).where(eq(candidateAccessLinks.id, link.id)); const detail = await getHiringDetail(link.companyId, link.processId); if (detail && recordActivity) { await activity(link.companyId, link.processId, "link_opened", "candidate"); await audit(link.companyId, "candidate_link_opened", { processId: link.processId, linkId: link.id }); } return detail ? { ...detail, linkId: link.id, expiresAt: link.expiresAt } : null; }
+export async function getPortal(token: string, recordActivity = true) { const db = await getDb(); if (!db) throw new Error("No pudimos verificar el enlace en este momento. Intenta de nuevo en unos minutos."); const link = (await db.select().from(candidateAccessLinks).where(eq(candidateAccessLinks.tokenHash, hashToken(token))).limit(1))[0]; if (!link) return null; if (!isLinkUsable(link.status, link.expiresAt)) { if (link.status === "active" && link.expiresAt.getTime() < Date.now()) { await audit(link.companyId, "candidate_link_expired", { processId: link.processId, linkId: link.id }); await activity(link.companyId, link.processId, "link_expired", "system", undefined, { linkId: link.id }); } return null; } await db.update(candidateAccessLinks).set({ lastUsedAt: new Date() }).where(eq(candidateAccessLinks.id, link.id)); const detail = await getHiringDetail(link.companyId, link.processId); if (detail && recordActivity) { await activity(link.companyId, link.processId, "link_opened", "candidate"); await audit(link.companyId, "candidate_link_opened", { processId: link.processId, linkId: link.id }); } return detail ? { ...detail, company: companyForPortal(detail.company), linkId: link.id, expiresAt: link.expiresAt } : null; }
 export async function uploadPortalDocument(token: string, requirementId: number, originalName: string, mimeType: string, bytes: Uint8Array) {
   const portal = await getPortal(token, false);
   if (!portal) throw new Error("Enlace no disponible");

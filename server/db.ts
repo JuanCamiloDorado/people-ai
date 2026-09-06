@@ -42,6 +42,25 @@ async function ensureSchema(db: ReturnType<typeof drizzle>) {
       // Column might already exist
     }
 
+    // Contacto de soporte del portal del candidato. Dos ALTER separados y no uno con dos
+    // ADD: si una de las dos columnas ya existe, MySQL aborta la sentencia entera y la
+    // otra no llegaria a crearse nunca.
+    try {
+      await db.execute(
+        sql`ALTER TABLE \`companies\` ADD COLUMN \`candidateSupportEmail\` VARCHAR(320) NULL;`
+      );
+    } catch {
+      // Column might already exist
+    }
+
+    try {
+      await db.execute(
+        sql`ALTER TABLE \`companies\` ADD COLUMN \`candidateSupportPhone\` VARCHAR(40) NULL;`
+      );
+    } catch {
+      // Column might already exist
+    }
+
     try {
       await db.execute(
         sql`ALTER TABLE \`document_templates\` MODIFY COLUMN \`positionId\` INT NULL;`

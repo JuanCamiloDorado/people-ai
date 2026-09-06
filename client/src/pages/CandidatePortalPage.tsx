@@ -25,6 +25,7 @@ import {
   getAcceptAttribute,
   getFileTypeBadgeInfo,
 } from "@shared/documentTypes";
+import { telHref } from "@shared/contacto";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -603,28 +604,43 @@ export default function CandidatePortalPage() {
               </p>
             </div>
 
-            {/* Help / Support box */}
-            <div className="rounded-2xl border border-slate-200/80 bg-slate-50/60 p-5">
-              <div className="text-sm font-semibold text-slate-800">
-                ¿Dudas con un documento?
+            {/* Help / Support box.
+                Correo y telefono salen de `companies.candidateSupportEmail` /
+                `candidateSupportPhone`, editables desde Contrataciones. Antes el correo se
+                FABRICABA con `talento@${nombreEmpresa}.co` -- un buzon que en general no
+                existe -- y el telefono estaba hardcodeado. Cada linea se oculta si no hay
+                valor: un `mailto:` vacio es peor que no ofrecer el canal, y la tarjeta
+                entera desaparece si no hay ninguno de los dos. */}
+            {(company?.candidateSupportEmail || company?.candidateSupportPhone) && (
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/60 p-5">
+                <div className="text-sm font-semibold text-slate-800">
+                  ¿Dudas con un documento?
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Escríbenos y te ayudamos con las especificaciones antes de que venza el plazo.
+                </p>
+                <div className="mt-3.5 space-y-1.5 font-mono text-xs text-[#0144a0]">
+                  {company?.candidateSupportEmail && (
+                    <a
+                      href={`mailto:${company.candidateSupportEmail}`}
+                      className="flex items-center gap-2 hover:underline"
+                    >
+                      <Mail className="h-3.5 w-3.5 text-slate-400" />
+                      {company.candidateSupportEmail}
+                    </a>
+                  )}
+                  {company?.candidateSupportPhone && (
+                    <a
+                      href={telHref(company.candidateSupportPhone)}
+                      className="flex items-center gap-2 hover:underline"
+                    >
+                      <Phone className="h-3.5 w-3.5 text-slate-400" />
+                      {company.candidateSupportPhone}
+                    </a>
+                  )}
+                </div>
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                Escríbenos y te ayudamos con las especificaciones antes de que venza el plazo.
-              </p>
-              <div className="mt-3.5 space-y-1.5 font-mono text-xs text-[#0144a0]">
-                <a
-                  href={`mailto:talento@${company?.name?.toLowerCase().replace(/\s+/g, "") || "bivien"}.co`}
-                  className="flex items-center gap-2 hover:underline"
-                >
-                  <Mail className="h-3.5 w-3.5 text-slate-400" />
-                  talento@{company?.name?.toLowerCase().replace(/\s+/g, "") || "bivien"}.co
-                </a>
-                <a href="tel:+573000000000" className="flex items-center gap-2 hover:underline">
-                  <Phone className="h-3.5 w-3.5 text-slate-400" />
-                  +57 (601) 000 0000
-                </a>
-              </div>
-            </div>
+            )}
           </aside>
 
           {/* ----------------------------------------------------------------------- */}
