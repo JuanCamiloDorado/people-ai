@@ -772,6 +772,24 @@ export const uniqueZipName = (usados: Set<string>, name: string) => {
   usados.add(unico);
   return unico;
 };
+/** Nombre de la carpeta que envuelve el expediente dentro del ZIP y, con `.zip`, del
+ *  propio archivo. `${nombre} - ${cedula}` porque al descomprimir varios expedientes en el
+ *  mismo directorio la cedula es lo unico que separa a dos homonimos.
+ *
+ *  El saneado no es cosmetico: `fullName` e `identificationNumber` los teclea un analista
+ *  sin validacion de formato y aqui alimentan una RUTA dentro del ZIP. Una barra
+ *  convertiria la carpeta en un arbol de subdirectorios, y `..` mas un extractor ingenuo es
+ *  un Zip Slip. Se conservan espacios y guiones -- van en el formato pedido -- y cae todo lo
+ *  demas salvo punto y guion bajo, lo que de paso cubre los caracteres que Windows prohibe
+ *  en un nombre de carpeta. El recorte de los extremos evita otros dos limites: Windows no
+ *  admite nombres terminados en `.` ni en ` `, y un punto inicial esconde la carpeta en Unix. */
+export const expedienteFolderName = (fullName?: string | null, identificationNumber?: string | null) => {
+  const limpiar = (valor: string) => valor.replace(/[^a-zA-Z0-9áéíóúüÁÉÍÓÚÜñÑ ._-]/g, " ").replace(/\s+/g, " ").trim();
+  const nombre = limpiar(fullName || "") || "candidato";
+  const cedula = limpiar(identificationNumber || "");
+  const base = [nombre, cedula].filter(Boolean).join(" - ");
+  return base.replace(/^[. ]+|[. ]+$/g, "") || "expediente";
+};
 export async function downloadHiringZip(companyId: number, processId: number, userId: number) {
   const detail = await getHiringDetail(companyId, processId);
   if (!detail) throw new Error("Hiring process not found");
@@ -780,6 +798,14 @@ export async function downloadHiringZip(companyId: number, processId: number, us
   // se lleve por delante a todas las empresas. Ver MAX_ZIP_BYTES.
   const totalBytes = detail.documents.reduce((suma, item) => suma + (item.sizeBytes || 0), 0);
   if (totalBytes > MAX_ZIP_BYTES) throw new Error(`El expediente pesa ${Math.round(totalBytes / 1048576)} MB y supera el limite de ${Math.round(MAX_ZIP_BYTES / 1048576)} MB de la descarga comprimida. Descarga los documentos por separado.`);
+  // El boton de la ficha ya se deshabilita sin documentos, pero la procedure es alcanzable
+  // por si sola: sin esta guarda devolvia un ZIP vacio y perfectamente valido, que al
+  // abrirlo parece un expediente que se perdio por el camino en vez de uno que aun no
+  // existe.
+  if (!detail.documents.length) throw new Error("El candidato aún no ha subido ningún documento.");
+  // Nombre unico de la carpeta y del propio .zip. Se calcula una sola vez: `uniqueZipName`
+  // sigue recibiendo el nombre desnudo, porque la deduplicacion es dentro de la carpeta.
+  const carpeta = expedienteFolderName(detail.candidate?.fullName, detail.candidate?.identificationNumber);
   const usados = new Set<string>();
   const files: Array<{ name: string; bytes: Uint8Array }> = [];
   for (const document of detail.documents) {
@@ -793,12 +819,12 @@ export async function downloadHiringZip(companyId: number, processId: number, us
       // El detalle real ya quedo en el log del servidor; aqui interesa cual fallo.
       throw new Error(`No se pudo descargar ${document.normalizedName}`);
     }
-    files.push({ name: uniqueZipName(usados, document.normalizedName), bytes });
+    files.push({ name: `${carpeta}/${uniqueZipName(usados, document.normalizedName)}`, bytes });
   }
   const archive = await createZipArchive(files);
   await audit(companyId, "hiring_archive_downloaded", { processId, documentCount: detail.documents.length }, userId);
   await activity(companyId, processId, "archive_downloaded", "analyst", userId, { documentCount: detail.documents.length });
-  return { filename: `${(detail.candidate?.fullName || "candidato").replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]/g, "_")}_expediente.zip`, base64: archive.toString("base64"), documentCount: detail.documents.length };
+  return { filename: `${carpeta}.zip`, base64: archive.toString("base64"), documentCount: detail.documents.length };
 }
 
 export async function getDashboardStats(companyId: number) {

@@ -15,6 +15,7 @@ import {
   Bell,
   ShieldOff,
   Clock3,
+  Download,
   BrainCircuit,
   AlertTriangle,
   Check,
@@ -643,10 +644,40 @@ export default function HiringDetailPage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Documentos requeridos</CardTitle>
-                <p className="text-sm text-slate-500">
-                  {received}/{requirements.length} documentos recibidos · {pending} pendientes
-                </p>
+                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                  <div>
+                    <CardTitle className="text-base">Documentos requeridos</CardTitle>
+                    <p className="text-sm text-slate-500">
+                      {received}/{requirements.length} documentos recibidos · {pending} pendientes
+                    </p>
+                  </div>
+                  {/* El title va en el span y no en el Button: la variante de shadcn aplica
+                      disabled:pointer-events-none, asi que un boton deshabilitado no recibe
+                      hover y nunca mostraria su propio tooltip -- justo el unico caso en el
+                      que hay algo que explicar. */}
+                  <span
+                    className="shrink-0"
+                    title={
+                      documents.length === 0
+                        ? "El candidato aún no ha subido documentos"
+                        : undefined
+                    }
+                  >
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={downloadZip.isPending || documents.length === 0}
+                      onClick={() => downloadZip.mutate({ companyId, processId })}
+                    >
+                      {downloadZip.isPending ? (
+                        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="mr-1 h-3.5 w-3.5" />
+                      )}
+                      {downloadZip.isPending ? "Preparando…" : "Descargar todo"}
+                    </Button>
+                  </span>
+                </div>
               </CardHeader>
               <CardContent className="space-y-3">
                 {requirements.map((req) => {
@@ -1051,13 +1082,6 @@ export default function HiringDetailPage() {
                     Aún no hay comunicaciones registradas.
                   </p>
                 )}
-                <Button
-                  variant="outline"
-                  disabled={downloadZip.isPending || documents.length === 0}
-                  onClick={() => downloadZip.mutate({ companyId, processId })}
-                >
-                  Descargar expediente ZIP
-                </Button>
               </CardContent>
             </Card>
           </div>

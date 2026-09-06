@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALLOWED_MIME_TYPES, MAX_FILE_BYTES, MAX_ZIP_BYTES, hasMagicSignature, hashToken, isValidUpload, normalize, uniqueZipName } from "./hrDomain";
+import { ALLOWED_MIME_TYPES, MAX_FILE_BYTES, MAX_ZIP_BYTES, expedienteFolderName, hasMagicSignature, hashToken, isValidUpload, normalize, uniqueZipName } from "./hrDomain";
 import { assertCompanyScope, assertRole } from "./authorization";
 
 describe("Fases 2 y 3 — seguridad y documentos", () => {
@@ -278,6 +278,39 @@ describe("descarga del expediente comprimido", () => {
     expect(uniqueZipName(usados, "Contrato.pdf")).toBe("Contrato.pdf");
     expect(uniqueZipName(usados, "Contrato-2.pdf")).toBe("Contrato-2.pdf");
     expect(uniqueZipName(usados, "Contrato.pdf")).toBe("Contrato-3.pdf");
+  });
+
+  it("nombra la carpeta con el nombre del candidato y su numero de identificacion", () => {
+    // El formato que se descarga y se archiva. Dos homonimos solo se distinguen por la
+    // cedula, asi que va en el nombre y no solo dentro del expediente.
+    expect(expedienteFolderName("CAMILO DORADO", "1098765432")).toBe("CAMILO DORADO - 1098765432");
+    expect(expedienteFolderName("José Muñoz Peña", "1.098.765-432")).toBe("José Muñoz Peña - 1.098.765-432");
+  });
+
+  it("no deja que el nombre del candidato construya rutas dentro del ZIP", () => {
+    // `fullName` lo teclea un analista sin validacion de formato y aqui alimenta una RUTA
+    // dentro del ZIP: una barra convertiria la carpeta en un arbol de subdirectorios, y
+    // `..` mas un extractor ingenuo es un Zip Slip.
+    const carpeta = expedienteFolderName("../../etc/passwd", "1/2");
+    expect(carpeta).not.toContain("/");
+    expect(carpeta).not.toContain("\\");
+    expect(carpeta).not.toContain("..");
+  });
+
+  it("respeta los limites de Windows para un nombre de carpeta", () => {
+    // Windows rechaza los nombres terminados en punto o espacio, y un punto inicial
+    // esconde la carpeta en Unix.
+    expect(expedienteFolderName("Ana Ruiz", "123.")).toBe("Ana Ruiz - 123");
+    expect(expedienteFolderName("  .Ana Ruiz  ", "123")).toBe("Ana Ruiz - 123");
+    expect(expedienteFolderName("Ana*Ruiz?", "12:3")).toBe("Ana Ruiz - 12 3");
+  });
+
+  it("nunca devuelve una carpeta vacia", () => {
+    // Sin nombre utilizable el ZIP seguiria descargandose: una carpeta sin nombre daria un
+    // ".zip" a secas y una entrada "/documento.pdf" colgando de la raiz.
+    expect(expedienteFolderName("", "1098765432")).toBe("candidato - 1098765432");
+    expect(expedienteFolderName(null, null)).toBe("candidato");
+    expect(expedienteFolderName("///", "")).toBe("candidato");
   });
 
   it("el tope del ZIP deja margen dentro de los 512 MB del contenedor", () => {
