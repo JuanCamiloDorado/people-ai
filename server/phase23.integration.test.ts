@@ -13,9 +13,23 @@ const context = (role: "HR" | "EMPLOYEE" = "HR"): TrpcContext => ({
 } as TrpcContext);
 
 describe("Fases 2 y 3 — contratos de flujo", () => {
-  it("no expone un portal para un token inexistente", async () => {
-    const result = await appRouter.createCaller(context()).candidatePortal.get({ token: "a".repeat(32) });
-    expect(result).toBeNull();
+  // OJO: este caso NO demuestra que un token inexistente se rechace. En el entorno de
+  // test no hay DATABASE_URL, asi que `getPortal` sale por su guarda de conexion antes
+  // de llegar a mirar el token, y daria lo mismo con cualquier entrada -- durante un
+  // tiempo el test afirmo justo eso y pasaba por el motivo equivocado.
+  //
+  // Lo que si fija es la otra mitad, que es una regresion real: que esa salida sea un
+  // error y no un `null`. El cliente pinta todo `null` como "Este enlace ya no esta
+  // disponible", asi que devolver null cuando la base no responde equivale a decirle a
+  // un candidato que su enlace expiro cuando esta perfectamente vivo.
+  //
+  // Un ida y vuelta real de generateLink -> getPortal exigiria una base en los tests,
+  // que hoy no existe; de ahi el aserto explicito de la precondicion.
+  it("sin base de datos falla con error, en vez de fingir que el enlace no existe", async () => {
+    expect(process.env.DATABASE_URL).toBeFalsy();
+    await expect(
+      appRouter.createCaller(context()).candidatePortal.get({ token: "a".repeat(32) })
+    ).rejects.toThrow(/No pudimos verificar el enlace/);
   });
 
   it("rechaza enlaces expirados y revocados antes de resolver el portal", () => {
