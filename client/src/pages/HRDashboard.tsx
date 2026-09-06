@@ -1,25 +1,25 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import HiringProcessesCard from "@/components/HiringProcessesCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
-import { BookOpen, Bot, FileText, Plus, UserPlus, Users, Settings2, MessageCircle, ArrowUpRight, AlertTriangle } from "lucide-react";
+import { BookOpen, Bot, FileText, Plus, UserPlus, Users, Settings2, AlertTriangle } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useLocation } from "wouter";
-import { cn } from "@/lib/utils";
-import { getHiringStatusInfo } from "@/lib/statusFormatters";
 
 export default function HRDashboard() {
   const { user } = useAuth();
-  const [, setLocation] = useLocation();
   const access = trpc.access.me.useQuery(undefined, { retry: false });
   const companyId = access.data?.companyId ?? 0;
+  // `hiring.list` se queda aunque la tabla ya no viva aqui: alimenta los valores de
+  // reserva de las tarjetas de abajo cuando `hr.stats` todavia no ha respondido. Es la
+  // misma queryKey que consulta `HiringProcessesCard`, asi que react-query la deduplica:
+  // una sola peticion y un solo dato para las tarjetas y para la tabla.
   const hiring = trpc.hiring.list.useQuery({ companyId }, { enabled: Boolean(companyId) });
   const stats = trpc.hr.stats.useQuery({ companyId }, { enabled: Boolean(companyId) });
   const knowledge = trpc.hr.knowledge.useQuery({ companyId }, { enabled: Boolean(companyId) });
-  const assistant = trpc.hr.assistantPreview.useQuery({ companyId }, { enabled: Boolean(companyId) });
   const expiring = trpc.hiring.expiringLinks.useQuery({ companyId, withinHours: 24 }, { enabled: Boolean(companyId) });
   const aiInsights = trpc.ai.insights.useQuery({ companyId, status: "unread" }, { enabled: Boolean(companyId) });
   const soon = (label: string) => toast.info(`${label} estará disponible en la siguiente fase.`);
@@ -171,122 +171,12 @@ export default function HRDashboard() {
           ))}
         </div>
 
-        {/* Contratación & Assistant */}
-        <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
-          <Card className="border-slate-200/80 shadow-sm">
-            <CardHeader className="flex flex-row items-start justify-between border-b border-slate-100">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <FileText className="h-4 w-4 text-blue-600" />Contratación
-                </CardTitle>
-                <p className="mt-1 text-xs text-slate-500">Acompaña cada proceso hasta tener su expediente listo.</p>
-              </div>
-              <Button
-                size="sm"
-                onClick={() => setLocation("/hr/contrataciones")}
-                className="bg-slate-950 text-white hover:bg-slate-800"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />Nueva contratación
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="hidden grid-cols-[1.3fr_1fr_0.6fr_0.7fr_auto] gap-3 border-b border-slate-100 px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400 sm:grid">
-                <span>Candidato</span>
-                <span>Cargo</span>
-                <span>Documentos</span>
-                <span>Estado</span>
-                <span />
-              </div>
-
-              {hiring.isLoading ? (
-                <div className="space-y-3 p-5">
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              ) : hiring.error ? (
-                <p className="p-6 text-sm text-rose-600">No se pudo cargar la información de contratación.</p>
-              ) : candidates.length ? (
-                candidates.slice(0, 5).map(candidate => (
-                  <div
-                    key={candidate.id}
-                    onClick={() => setLocation(`/hr/contrataciones/${candidate.id}`)}
-                    className="grid cursor-pointer gap-2 border-b border-slate-100 px-5 py-4 text-sm transition hover:bg-slate-50/80 sm:grid-cols-[1.3fr_1fr_0.6fr_0.7fr_auto] sm:items-center"
-                  >
-                    <span className="font-medium text-slate-800">{candidate.candidateName}</span>
-                    <span className="text-slate-500">{candidate.positionName}</span>
-                    <span className="text-slate-500">
-                      {candidate.receivedCount}/{candidate.requiredCount}
-                    </span>
-                    {(() => {
-                      const statusInfo = getHiringStatusInfo(candidate.status, candidate.requiredCount, candidate.receivedCount);
-                      return (
-                        <Badge
-                          variant="outline"
-                          className={cn("w-fit font-normal", statusInfo.className)}
-                        >
-                          {statusInfo.label}
-                        </Badge>
-                      );
-                    })()}
-                    <ArrowUpRight className="hidden h-4 w-4 text-slate-400 sm:block" />
-                  </div>
-                ))
-              ) : (
-                <div className="p-8 text-center">
-                  <p className="text-sm font-medium text-slate-700">Aún no hay procesos registrados</p>
-                  <p className="mt-1 text-xs text-slate-400">Crea el primer proceso para iniciar el seguimiento de expedientes.</p>
-                </div>
-              )}
-
-              <div className="flex justify-end p-4">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setLocation("/hr/contrataciones")}
-                  className="text-xs text-slate-600 hover:text-slate-900"
-                >
-                  Ver contrataciones <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="overflow-hidden border-0 bg-slate-950 text-white shadow-xl">
-            <CardContent className="relative p-6">
-              <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" />
-              <div className="relative">
-                <div className="flex items-center justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10">
-                    <Bot className="h-5 w-5 text-blue-200" />
-                  </div>
-                  <Badge className="border-0 bg-teal-500/20 text-teal-200">Asistente</Badge>
-                </div>
-                <h2 className="mt-5 text-xl font-semibold">PEOPLE AI Assistant</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  Responde preguntas frecuentes utilizando la información oficial de la empresa.
-                </p>
-                <div className="mt-5 space-y-3 rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
-                  <p className="text-slate-400">Colaborador</p>
-                  <p>¿Cómo solicito un certificado laboral?</p>
-                  <div className="flex gap-2 border-t border-white/10 pt-3">
-                    <Bot className="mt-0.5 h-4 w-4 shrink-0 text-teal-300" />
-                    <p className="text-slate-300">
-                      {assistant.isLoading
-                        ? "Cargando respuesta…"
-                        : assistant.data?.content || "Puedes solicitar certificados laborales directamente desde el módulo de Talento Humano."}
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  onClick={() => setLocation("/hr/assistant")}
-                  className="mt-5 w-full border border-white/15 bg-white/10 text-white hover:bg-white/20"
-                >
-                  <MessageCircle className="mr-2 h-4 w-4" />Probar HR Assistant
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        {/* Procesos de contratacion: la MISMA tabla que /hr/contrataciones, a ancho
+            completo. Antes aqui habia una copia reducida a cinco filas -- sin filtros, sin
+            fecha limite y sin borrado -- que se fue quedando atras, y al lado un panel de
+            demostracion del asistente cuya respuesta estaba escrita a mano en el servidor.
+            El asistente de verdad sigue en el menu lateral, en /hr/assistant. */}
+        <HiringProcessesCard conBotonNuevaContratacion conEnlaceVerContrataciones />
 
         {/* Base de conocimiento & Canales */}
         <div className="grid gap-6 xl:grid-cols-[1fr_0.8fr]">

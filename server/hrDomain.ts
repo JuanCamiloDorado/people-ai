@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { aiAnalysisRuns, aiConversationMessages, aiConversations, aiDocumentFindings, aiHiringSummaries, aiInsights, auditLogs, candidateAccessLinks, candidateDocuments, candidateProfiles, candidateOtpChallenges, companies, communicationLogs, companyCommunicationSettings, documentTemplateItems, documentTemplates, hiringProcesses, hiringRequirements, internalNotifications, jobPositions, processActivities } from "../drizzle/schema";
 import { getDb } from "./db";
@@ -473,7 +473,77 @@ export async function deleteTemplate(companyId: number, templateId: number, user
   await audit(companyId, "document_template_deleted", { templateId, name: template.name }, userId);
   return { success: true, id: templateId };
 }
-export async function listHiring(companyId: number) { const db = await getDb(); if (!db) return []; const processes = await db.select().from(hiringProcesses).where(eq(hiringProcesses.companyId, companyId)).orderBy(desc(hiringProcesses.createdAt)); return Promise.all(processes.map(async process => { const detail = await getHiringDetail(companyId, process.id); return { ...process, candidateName: detail?.candidate?.fullName || "Candidato", positionName: detail?.position?.name || "Cargo", requiredCount: detail?.requirements.filter(r => r.required).length || 0, receivedCount: detail?.requirements.filter(r => ["uploaded", "replaced", "verified"].includes(r.status)).length || 0 }; })); }
+/** Listado de procesos: alimenta la tabla y, via `getDashboardStats`, las tarjetas del
+ *  inicio.
+ *
+ *  Antes era un N+1. Una consulta para los procesos y, por CADA uno, un
+ *  `getHiringDetail()` que son seis SELECT mas la sincronizacion de requisitos con la
+ *  plantilla: tres procesos costaban diecinueve consultas y cien pasaban de seiscientas.
+ *  Desde que la tabla vive tambien en el inicio eso corre en la portada, y las tarjetas
+ *  vuelven a pagarlo entero porque `getDashboardStats` llama aqui otra vez.
+ *
+ *  De todo aquello la lista solo usaba cuatro campos, asi que ahora son dos consultas
+ *  fijas, sea cual sea el numero de procesos: los procesos con el candidato y el cargo
+ *  pegados por JOIN, y los recuentos agregados con GROUP BY.
+ *
+ *  Lo que se deja de hacer al no pasar por `getHiringDetail`: su sincronizacion escribe
+ *  `allowedMimeTypes` y `description` de los requisitos, y NO toca `required` ni
+ *  `status`, que son los dos unicos campos de los que salen los recuentos de aqui. El
+ *  listado nunca dependio de esa escritura. Y los dos sitios que si leen esos campos --
+ *  el detalle y el portal del candidato -- siguen entrando por `getHiringDetail`, asi que
+ *  la sincronizacion sigue ocurriendo antes de cada uso real. Pintar una lista ya no
+ *  emite UPDATEs.
+ *
+ *  Los JOIN son LEFT a proposito: con INNER, un proceso cuyo candidato o cargo hubiera
+ *  desaparecido dejaria de salir en la lista en vez de mostrarse con el texto de reserva,
+ *  que es lo que hacia el `|| "Candidato"` de antes. Desaparecer en silencio es el peor
+ *  modo de fallo posible para un expediente. */
+export async function listHiring(companyId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({ process: hiringProcesses, candidateName: candidateProfiles.fullName, positionName: jobPositions.name })
+    .from(hiringProcesses)
+    .leftJoin(candidateProfiles, and(eq(candidateProfiles.id, hiringProcesses.candidateId), eq(candidateProfiles.companyId, companyId)))
+    .leftJoin(jobPositions, and(eq(jobPositions.id, hiringProcesses.positionId), eq(jobPositions.companyId, companyId)))
+    .where(eq(hiringProcesses.companyId, companyId))
+    .orderBy(desc(hiringProcesses.createdAt));
+  // Sin procesos no hay segunda consulta -- y ademas `inArray` con lista vacia genera
+  // `in ()`, que MySQL rechaza como error de sintaxis.
+  if (rows.length === 0) return [];
+
+  // Los dos recuentos miran subconjuntos DISTINTOS y solapados: `requiredCount` son los
+  // requisitos obligatorios y `receivedCount` los que ya llegaron, sean obligatorios o
+  // no. No es un descuido que convenga "arreglar" de paso: es la semantica que la tabla
+  // ya venia pintando, y tocarla moveria el "1/12" de todas las filas del sistema.
+  // El `companyId` va en el WHERE ademas del `inArray` por la misma razon que en el resto
+  // del archivo: el aislamiento entre empresas vive solo en codigo de aplicacion.
+  const counts = await db
+    .select({
+      processId: hiringRequirements.processId,
+      requiredCount: sql<number>`count(case when ${hiringRequirements.required} then 1 end)`,
+      receivedCount: sql<number>`count(case when ${hiringRequirements.status} in ('uploaded', 'replaced', 'verified') then 1 end)`,
+    })
+    .from(hiringRequirements)
+    .where(and(eq(hiringRequirements.companyId, companyId), inArray(hiringRequirements.processId, rows.map(r => r.process.id))))
+    .groupBy(hiringRequirements.processId);
+
+  // `sql<number>` es una asercion de tipo, no una conversion: quien decide es el driver.
+  // `count()` llega como numero, pero `sum()` -- el agregado al que es facil migrar esto
+  // el dia que haga falta ponderar algo -- llega como string en mysql2, y entonces el
+  // `receivedCount >= requiredCount` que usan las tarjetas y `getHiringStatusInfo`
+  // compararia cadenas: "9" >= "12" seria true y el proceso saldria completo. El
+  // `Number()` hace cierto el tipo declarado en vez de solo prometerlo.
+  const porProceso = new Map(counts.map(c => [c.processId, { requiredCount: Number(c.requiredCount), receivedCount: Number(c.receivedCount) }]));
+
+  return rows.map(({ process, candidateName, positionName }) => ({
+    ...process,
+    candidateName: candidateName || "Candidato",
+    positionName: positionName || "Cargo",
+    requiredCount: porProceso.get(process.id)?.requiredCount ?? 0,
+    receivedCount: porProceso.get(process.id)?.receivedCount ?? 0,
+  }));
+}
 export async function createHiring(companyId: number, userId: number, input: { fullName: string; identificationNumber: string; email: string; positionId: number; templateId: number; documentDeadline?: Date | string | null }) {
   const db = await getDb();
   const deadlineDate = input.documentDeadline ? new Date(input.documentDeadline) : null;
