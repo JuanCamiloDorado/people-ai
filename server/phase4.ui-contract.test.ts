@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const readClient = (file: string) => readFileSync(resolve(process.cwd(), "client/src/pages", file), "utf8");
+const readComponent = (file: string) => readFileSync(resolve(process.cwd(), "client/src/components", file), "utf8");
 
 describe("Fase 4A UI contracts", () => {
   it("expone asistente contextual limitado por processId", () => {
@@ -32,12 +33,27 @@ describe("Fase 4A UI contracts", () => {
     expect(source).toContain("trpc.hiring.list.useQuery");
     expect(source).toContain("trpc.hr.stats.useQuery");
     expect(source).toContain("/hr/contrataciones");
-    expect(source).toContain("/hr/contrataciones/${candidate.id}");
+    // El invariante es "el dashboard enlaza a rutas reales de detalle por proceso, con el id
+    // que devuelve el backend". La tabla propia del dashboard ya no existe -- es
+    // `HiringProcessesCard`, y su enlace por fila se verifica en la prueba de abajo --, pero
+    // el dashboard sigue construyendo rutas de detalle por su cuenta desde los insights de
+    // IA y desde los enlaces por expirar. Esas son las que quedan aqui.
+    expect(source).toContain("/hr/contrataciones/${insight.processId}");
+    expect(source).toContain("/hr/contrataciones/${item.processId}");
+    expect(source).toContain("<HiringProcessesCard");
     expect(source).not.toContain('"08"');
     expect(source).not.toContain('"14"');
     expect(source).not.toContain('"05"');
     expect(source).not.toContain('"142"');
     expect(source).not.toContain("Consultas atendidas · demo");
+  });
+
+  it("la tabla compartida de procesos enlaza al detalle real de cada proceso", () => {
+    // La mitad del invariante anterior que se mudo al componente: cada fila lleva al detalle
+    // por id, y las filas salen del backend y no de una constante de demostracion.
+    const source = readComponent("HiringProcessesCard.tsx");
+    expect(source).toContain("trpc.hiring.list.useQuery");
+    expect(source).toContain("/hr/contrataciones/${process.id}");
   });
 
   it("garantiza que CandidatePortalPage maneja estado de carga con skeleton sin flash de enlace expirado", () => {

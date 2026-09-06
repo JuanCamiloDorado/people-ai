@@ -18,9 +18,16 @@ import type { TrpcContext } from "./_core/context";
  *  se hace a mano contra la app, como el resto del proyecto.
  *
  *  La tecnica de aserciones sobre el texto fuente es la de `phase4.ui-contract.test.ts` y
- *  `hiring.link.contract.test.ts`: para `HiringPage.tsx` es la unica red que hay. */
+ *  `hiring.link.contract.test.ts`: para la interfaz es la unica red que hay. La tabla con el
+ *  borrado ya no vive en `HiringPage.tsx` sino en `HiringProcessesCard`, el componente que
+ *  renderizan tanto `/hr/contrataciones` como el inicio, asi que las aserciones de markup
+ *  apuntan al componente -- y una asercion extra comprueba que las dos paginas siguen
+ *  usandolo, porque si no las de aqui abajo se quedarian verdes protegiendo codigo
+ *  huerfano. */
 const readClient = (file: string) =>
   readFileSync(resolve(process.cwd(), "client/src/pages", file), "utf8");
+const readComponent = (file: string) =>
+  readFileSync(resolve(process.cwd(), "client/src/components", file), "utf8");
 const readServer = (file: string) =>
   readFileSync(resolve(process.cwd(), "server", file), "utf8");
 
@@ -122,20 +129,37 @@ describe("Borrado de contrataciones — contrato", () => {
     // arbol de accesibilidad. El enlace se estira sobre la fila con un ::after, asi que no
     // hace falta ningun stopPropagation -- que es justo la correccion que se pierde el dia
     // que alguien envuelva el boton en un Tooltip o un DialogTrigger.
-    const source = readClient("HiringPage.tsx");
+    const source = readComponent("HiringProcessesCard.tsx");
     expect(source).toContain("after:absolute after:inset-0");
     // La forma de llamada, no el nombre suelto: el comentario que explica por que no hace
     // falta lo menciona, y con `toContain("stopPropagation")` se acusaria a si mismo.
     expect(source).not.toContain("stopPropagation()");
     expect(source).toContain("aria-label={`Eliminar la contratación de ${process.candidateName}`}");
+    // La otra mitad del mismo truco: sin `relative z-10` en la celda de acciones el overlay
+    // del ::after se traga el clic y el boton queda visible pero muerto.
+    expect(source).toContain("relative z-10");
   });
 
   it("confirma antes de borrar y avisa de que no hay vuelta atras", () => {
-    const source = readClient("HiringPage.tsx");
+    const source = readComponent("HiringProcessesCard.tsx");
     expect(source).toContain("Esta acción no se puede deshacer.");
     // Sin `hr.stats` las tarjetas del dashboard siguen contando una fila que ya no existe:
-    // `getDashboardStats` es el mismo `listHiring` recontado.
+    // `getDashboardStats` es el mismo `listHiring` recontado. Ahora ademas la tabla y las
+    // tarjetas comparten pantalla en el inicio, asi que la fila fantasma seria visible.
     expect(source).toContain("utils.hr.stats.invalidate()");
     expect(source).toContain("utils.hiring.list.invalidate()");
+  });
+
+  it("las dos vistas que listan procesos renderizan el mismo componente", () => {
+    // Sin esto las dos pruebas de arriba seguirian verdes con el componente huerfano:
+    // bastaria con que alguien volviera a escribir la tabla a mano en una de las dos
+    // paginas para recuperar el boton dentro del enlace, el borrado sin confirmar o una
+    // lista que no se entera de que la fila ya no existe.
+    const hiringPage = readClient("HiringPage.tsx");
+    const dashboard = readClient("HRDashboard.tsx");
+    expect(hiringPage).toContain("<HiringProcessesCard");
+    expect(dashboard).toContain("<HiringProcessesCard");
+    expect(hiringPage).not.toContain("trpc.hiring.delete.useMutation");
+    expect(dashboard).not.toContain("trpc.hiring.delete.useMutation");
   });
 });

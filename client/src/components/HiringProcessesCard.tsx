@@ -1,0 +1,272 @@
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ArrowUpRight, Plus, Trash2, UserRound } from "lucide-react";
+import { useState } from "react";
+import { Link, useLocation } from "wouter";
+import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
+import { useCompanyId } from "@/hooks/useCompanyId";
+import { cn } from "@/lib/utils";
+import { getHiringStatusInfo } from "@/lib/statusFormatters";
+
+/** Listado de procesos de contratacion: la MISMA tabla en el inicio (`HRDashboard`) y en
+ *  `/hr/contrataciones` (`HiringPage`).
+ *
+ *  Antes el inicio tenia su propia copia reducida -- cinco filas, sin filtros, sin fecha
+ *  limite y sin borrado. Dos tablas de los mismos datos se separan solas: el enlace
+ *  estirado accesible, el borrado con confirmacion y las seis invalidaciones de cache
+ *  solo llegaron a una de las dos, y el analista veia un estado distinto segun por donde
+ *  entrara.
+ *
+ *  La empresa activa se resuelve DENTRO con `useCompanyId()`, no por props. Es la regla
+ *  del repo (nunca hardcodear ni pasear `companyId`) y una prop es justo el sitio donde
+ *  alguien acaba pasando un 0 -- que el zod del servidor rechaza -- o el id de otro
+ *  tenant. No cuesta una peticion: `access.me`, `hiring.list` y `positions.list` ya se
+ *  consultan en las paginas que montan esta tarjeta y react-query las deduplica por
+ *  queryKey; esto solo anade observadores sobre la misma entrada de cache. */
+export default function HiringProcessesCard({
+  conBotonNuevaContratacion = false,
+  conEnlaceVerContrataciones = false,
+}: {
+  /** Solo el inicio. En `/hr/contrataciones` ya estan el boton de la cabecera de pagina y
+   *  el formulario de alta justo encima de esta tarjeta. */
+  conBotonNuevaContratacion?: boolean;
+  /** Idem: ir a `/hr/contrataciones` desde `/hr/contrataciones` no lleva a ningun sitio. */
+  conEnlaceVerContrataciones?: boolean;
+}) {
+  const { companyId, ready, isLoading: cargandoEmpresa, error: errorEmpresa } = useCompanyId();
+  const [, setLocation] = useLocation();
+  const utils = trpc.useUtils();
+  const hiring = trpc.hiring.list.useQuery({ companyId }, { enabled: ready });
+  const positions = trpc.positions.list.useQuery({ companyId }, { enabled: ready });
+  const [statusFilter, setStatusFilter] = useState("all"); const [positionFilter, setPositionFilter] = useState("all");
+  const [processToDelete, setProcessToDelete] = useState<{ id: number; candidateName: string } | null>(null);
+
+  // El borrado es fisico y arrastra tablas que alimentan otras cuatro vistas, asi que hay
+  // que invalidar todas: `hr.stats` son las tarjetas del dashboard (se calculan con el
+  // mismo `listHiring`), y los enlaces, los insights y las notificaciones de este proceso
+  // dejan de existir. Sin esto el dashboard sigue contando una fila que ya no esta -- y
+  // ahora que esta tabla vive tambien en el inicio, las tarjetas y la fila fantasma se
+  // desmienten en la misma pantalla.
+  const remove = trpc.hiring.delete.useMutation({
+    onSuccess: result => {
+      utils.hiring.list.invalidate(); utils.hr.stats.invalidate(); utils.hiring.expiringLinks.invalidate(); utils.hiring.notifications.invalidate(); utils.ai.insights.invalidate(); utils.hiring.detail.invalidate();
+      setProcessToDelete(null);
+      // El aviso importa: el proceso ya no existe, pero quedaron documentos personales en
+      // el almacenamiento que la aplicacion ya no puede localizar.
+      if (result.avisoAlmacenamiento) toast.warning("Contratación eliminada, pero algunos archivos no pudieron borrarse del almacenamiento. Queda registrado para el equipo técnico.");
+      else toast.success("Contratación eliminada");
+    },
+    onError: error => toast.error(error.message || "No fue posible eliminar la contratación"),
+  });
+
+  const rows = hiring.data?.filter(row => (statusFilter === "all" || row.status === statusFilter) && (positionFilter === "all" || String(row.positionId) === positionFilter)) || [];
+  // `isLoading` de react-query v5 es `isPending && isFetching`: con `enabled: false` vale
+  // FALSE, asi que mientras se resolvia la empresa activa la tabla se pintaba vacia --
+  // "No hay procesos con estos filtros" -- y luego saltaba a las filas. Se suma el
+  // `isLoading` de `access.me`, y no `!ready`, porque el `companyId` del servidor es
+  // `number | null`: con `!ready` el usuario que de verdad no tiene empresa activa se
+  // quedaria mirando un esqueleto para siempre.
+  const cargando = cargandoEmpresa || hiring.isLoading;
+  const hayError = Boolean(errorEmpresa || hiring.error);
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="text-base">Procesos recientes</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">
+              {cargando ? "Cargando procesos…" : `${rows.length} proceso(s) en este tenant.`}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[190px]">
+                <SelectValue placeholder="Estado" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos los estados</SelectItem>
+                <SelectItem value="pending">Pendiente</SelectItem>
+                <SelectItem value="in_review">En revisión</SelectItem>
+                <SelectItem value="complete">Completo</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={positionFilter} onValueChange={setPositionFilter}>
+              <SelectTrigger className="w-[190px]">
+                <SelectValue placeholder="Cargo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos los cargos</SelectItem>
+                {positions.data?.map(position => (
+                  <SelectItem key={position.id} value={String(position.id)}>
+                    {position.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {conBotonNuevaContratacion && (
+              <Button
+                size="sm"
+                onClick={() => setLocation("/hr/contrataciones")}
+                className="bg-slate-950 text-white hover:bg-slate-800"
+              >
+                <Plus className="mr-1 h-3.5 w-3.5" />Nueva contratación
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="hidden grid-cols-[1.4fr_1fr_0.8fr_0.8fr_0.8fr_76px] gap-3 border-b px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400 sm:grid">
+            <span>Candidato</span>
+            <span>Cargo</span>
+            <span>Progreso</span>
+            <span>Estado</span>
+            <span>Fecha</span>
+            <span className="text-right">Acciones</span>
+          </div>
+          {cargando ? (
+            <div className="space-y-3 p-5">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : hayError ? (
+            <p className="p-6 text-sm text-rose-600">No se pudo cargar la información de contratación.</p>
+          ) : rows.length ? (
+            rows.map(process => {
+              const statusInfo = getHiringStatusInfo(process.status, process.requiredCount, process.receivedCount);
+              return (
+                <div
+                  key={process.id}
+                  className="relative grid gap-2 border-b px-5 py-4 text-sm transition hover:bg-slate-50 sm:grid-cols-[1.4fr_1fr_0.8fr_0.8fr_0.8fr_76px] sm:items-center"
+                >
+                  <span className="flex items-center gap-2 font-medium">
+                    <UserRound className="h-4 w-4 text-slate-400" />
+                    {/* El enlace se estira sobre toda la fila en vez de envolverla: el
+                        boton de eliminar tiene que ser HERMANO del enlace, no
+                        descendiente suyo. Un <button> dentro de un <a> es HTML invalido
+                        y deja dos controles anidados en el arbol de accesibilidad;
+                        ademas asi no hace falta ningun stopPropagation, que es una
+                        correccion facil de perder el dia que alguien envuelva el boton
+                        en un Tooltip o en un DialogTrigger. */}
+                    <Link
+                      href={`/hr/contrataciones/${process.id}`}
+                      className="rounded-sm after:absolute after:inset-0 after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    >
+                      {process.candidateName}
+                    </Link>
+                  </span>
+                  <span className="text-slate-500">{process.positionName}</span>
+                  <span className="text-slate-500">
+                    {process.receivedCount}/{process.requiredCount}
+                  </span>
+                  <Badge
+                    variant="outline"
+                    className={cn("w-fit font-normal", statusInfo.className)}
+                  >
+                    {statusInfo.label}
+                  </Badge>
+                  <div className="flex flex-col text-xs text-slate-400">
+                    <span>{new Date(process.createdAt).toLocaleDateString("es-CO")}</span>
+                    {process.documentDeadline && (
+                      <span className="text-[11px] text-amber-600 font-medium">
+                        Límite: {new Date(process.documentDeadline).toLocaleDateString("es-CO")}
+                      </span>
+                    )}
+                  </div>
+                  {/* `relative z-10` levanta la celda por encima del enlace estirado:
+                      sin esto el overlay del ::after se comeria el clic del boton. */}
+                  <div className="relative z-10 flex items-center justify-end gap-1">
+                    <ArrowUpRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      // Con solo "Eliminar" un lector de pantalla anuncia N botones identicos.
+                      aria-label={`Eliminar la contratación de ${process.candidateName}`}
+                      onClick={() => setProcessToDelete({ id: process.id, candidateName: process.candidateName })}
+                      className="text-slate-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })
+          ) : hiring.data?.length ? (
+            <div className="p-8 text-center text-sm text-slate-500">No hay procesos con estos filtros.</div>
+          ) : (
+            // Vacio real distinto de vacio por filtro: "No hay procesos con estos filtros"
+            // es falso -- y desorienta -- cuando la empresa todavia no tiene ninguno.
+            <div className="p-8 text-center">
+              <p className="text-sm font-medium text-slate-700">Aún no hay procesos registrados</p>
+              <p className="mt-1 text-xs text-slate-400">Crea el primer proceso para iniciar el seguimiento de expedientes.</p>
+            </div>
+          )}
+
+          {conEnlaceVerContrataciones && (
+            <div className="flex justify-end p-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLocation("/hr/contrataciones")}
+                className="text-xs text-slate-600 hover:text-slate-900"
+              >
+                Ver contrataciones <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* DIALOG: Confirmar eliminacion de la contratacion. El borrado es fisico, asi que
+          el texto tiene que enumerar lo que se pierde: al analista no le queda ningun
+          sitio donde recuperarlo. Va fuera de la <Card> porque Radix lo portea al body de
+          todos modos y asi no hereda el overflow ni el z-index de la tarjeta. */}
+      <Dialog open={Boolean(processToDelete)} onOpenChange={open => { if (!open && !remove.isPending) setProcessToDelete(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2 text-red-600">
+              <Trash2 className="h-5 w-5" />
+              <DialogTitle className="text-lg font-bold text-slate-900">
+                Eliminar contratación
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-xs text-slate-500 pt-2">
+              Se eliminará de forma permanente el proceso de{" "}
+              <span className="font-semibold text-slate-900">"{processToDelete?.candidateName}"</span>:
+              los documentos que cargó, el enlace del portal, el historial de comunicaciones y los
+              análisis de IA asociados.{" "}
+              <span className="font-semibold text-slate-900">Esta acción no se puede deshacer.</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter className="gap-2 pt-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setProcessToDelete(null)}
+              disabled={remove.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => processToDelete && remove.mutate({ companyId, processId: processToDelete.id })}
+              disabled={remove.isPending}
+              className="bg-red-600 hover:bg-red-700 text-white shadow-sm"
+            >
+              {remove.isPending ? "Eliminando..." : "Eliminar contratación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
