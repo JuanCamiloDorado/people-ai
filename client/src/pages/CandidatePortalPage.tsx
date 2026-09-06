@@ -36,28 +36,6 @@ function formatFileSize(bytes: number): string {
   return Math.max(1, Math.round(bytes / 1024)) + " KB";
 }
 
-function getDefaultRequirementNote(title: string): string {
-  const t = title.toLowerCase();
-  if (t.includes("cédula") || t.includes("cedula")) {
-    return "Ambas caras ampliadas al 150 %, en un solo archivo, legibles y sin bordes cortados.";
-  }
-  if (t.includes("hoja de vida") || t.includes("curriculum") || t.includes("cv")) {
-    return "Con tu experiencia y estudios más recientes, incluyendo datos de contacto actualizados.";
-  }
-  if (t.includes("diploma") || t.includes("acta") || t.includes("grado") || t.includes("estudios")) {
-    return "Del título académico más alto que reportaste en tu proceso de selección.";
-  }
-  if (t.includes("eps") || t.includes("salud")) {
-    return "Certificado vigente de afiliación como cotizante o beneficiario, expedido en los últimos 30 días.";
-  }
-  if (t.includes("pensión") || t.includes("pension") || t.includes("cesantías") || t.includes("cesantias")) {
-    return "Certificado de afiliación expedido por tu fondo con fecha visible y legible.";
-  }
-  if (t.includes("banco") || t.includes("bancari") || t.includes("cuenta")) {
-    return "A tu nombre, con número y tipo de cuenta. No aceptamos capturas de pantalla de aplicaciones móviles.";
-  }
-  return "Documento oficial vigente y legible requerido para formalizar tu vinculación laboral.";
-}
 
 function getFormatChips(allowedMime?: string | null): string[] {
   const allowed = allowedMime || DEFAULT_ALLOWED_MIMETYPES;
@@ -748,7 +726,7 @@ export default function CandidatePortalPage() {
                     const isDragging = dragOverId === req.id;
                     const isHighlighted = highlightedId === req.id;
 
-                    const note = req.description || getDefaultRequirementNote(req.title);
+                    const note = req.description?.trim() || null;
                     const rawAllowed = req.allowedMimeTypes;
                     const formatChips = getFormatChips(rawAllowed);
                     const indexStr = idx < 9 ? `0${idx + 1}` : `${idx + 1}`;

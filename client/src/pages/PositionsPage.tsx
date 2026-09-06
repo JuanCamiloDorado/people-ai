@@ -342,6 +342,7 @@ export default function PositionsPage() {
       if (selectedTemplateId) {
         utils.templates.get.invalidate({ companyId, templateId: selectedTemplateId });
       }
+      utils.templates.getMasterStandard.invalidate();
       toast.success("Plantilla de documentos actualizada");
       setNewDocTitle("");
       setNewDocDesc("");
@@ -694,6 +695,7 @@ export default function PositionsPage() {
           description: doc.description,
           required: doc.required,
           sortOrder: idx + 1,
+          allowedMimeTypes: doc.allowedMimeTypes || DEFAULT_ALLOWED_MIMETYPES,
         }))
       );
       toast.info("Valores normativos cargados en la plantilla estándar");
@@ -712,6 +714,7 @@ export default function PositionsPage() {
         description: item.description,
         required: item.required,
         sortOrder: idx + 1,
+        allowedMimeTypes: item.allowedMimeTypes || DEFAULT_ALLOWED_MIMETYPES,
       })),
       applyToAllPositions: masterApplyToAll,
     });
