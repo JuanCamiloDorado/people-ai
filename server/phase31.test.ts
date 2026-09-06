@@ -56,12 +56,29 @@ describe("Fase 3.1 - correo transaccional", () => {
     expect(email.html).toContain("Fecha límite para cargar documentos:");
   });
 
+  /** Regresion: el template estaba escrito con `\\n`, que dentro de un template literal produce
+   *  barra invertida + letra n. El candidato veia "Hola CAMILO DORADO,\\n\\nNos encontramos...". */
+  it("usa saltos de linea reales, no la secuencia literal \\n", () => {
+    const email = buildCandidateEmail({ candidate: { fullName: "Ada Lovelace" }, position: { name: "Ingeniera" }, company: { name: "Empresa Demo" } } as never, "https://people.example/candidate/documents/token-demo");
+    expect(email.text).not.toContain("\\n");
+    expect(email.text.split("\n").length).toBeGreaterThan(3);
+  });
+
+  /** Regresion: `escapeHtml` se aplicaba una vez arriba y el resultado se reutilizaba en el
+   *  texto plano, asi que un candidato con "&" en el nombre recibia "&amp;" en el correo. */
+  it("no filtra entidades HTML al cuerpo en texto plano", () => {
+    const email = buildCandidateEmail({ candidate: { fullName: "Ana & José" }, position: { name: "Diseñador & Co" }, company: { name: "Empresa Demo" } } as never, "https://people.example/candidate/documents/token-demo");
+    expect(email.text).toContain("Ana & José");
+    expect(email.text).not.toContain("&amp;");
+    expect(email.html).toContain("Ana &amp; José");
+  });
+
   it("prepares a mailto draft without sending or requiring a provider", () => {
     const draft = prepareMailtoEmail({ to: "candidate@example.test", subject: "Demo", text: "Hola candidata", html: "<p>Hola candidata</p>" });
     expect(draft.status).toBe("prepared");
     expect(draft.mailtoUrl).toBe(buildMailtoUrl({ to: "candidate@example.test", subject: "Demo", text: "Hola candidata" }));
     expect(decodeURIComponent(draft.mailtoUrl)).toContain("candidate@example.test");
-    expect(decodeURIComponent(draft.mailtoUrl.replace(/\+/g, " "))).toContain("Hola candidata");
+    expect(decodeURIComponent(draft.mailtoUrl)).toContain("Hola candidata");
   });
 
   it("records manual send separately from draft preparation", () => {
@@ -77,7 +94,26 @@ describe("Fase 3.1 - correo transaccional", () => {
   it("encodes recipient, subject and body safely in mailto", () => {
     const url = buildMailtoUrl({ to: "candidate@example.test", subject: "Documentación & proceso", text: "Línea 1\nLínea 2" });
     expect(url.startsWith("mailto:candidate%40example.test?")).toBe(true);
-    expect(decodeURIComponent(url.replace(/\+/g, " "))).toContain("Documentación & proceso");
-    expect(decodeURIComponent(url.replace(/\+/g, " "))).toContain("Línea 1\nLínea 2");
+    expect(decodeURIComponent(url)).toContain("Documentación & proceso");
+    expect(decodeURIComponent(url)).toContain("Línea 1\r\nLínea 2");
+  });
+
+  /** Regresion: `encode` remataba con `.replace(/%20/g, "+")`, el truco de
+   *  `application/x-www-form-urlencoded`. En un `mailto:` (RFC 6068) el query es
+   *  percent-encoding puro y el `+` es un signo mas literal: el candidato recibia
+   *  "Hola+CAMILO+DORADO". */
+  it("codifica los espacios como %20 y nunca como +", () => {
+    const url = buildMailtoUrl({ to: "candidate@example.test", subject: "Documentación requerida", text: "Hola CAMILO DORADO" });
+    expect(url).toContain("%20");
+    expect(url).not.toContain("+");
+  });
+
+  /** Regresion: los saltos del cuerpo deben viajar como CRLF (`%0D%0A`), no como `%0A` suelto,
+   *  que Outlook de escritorio ignora y pega todo el correo en un parrafo. */
+  it("codifica los saltos del cuerpo como CRLF y hace round-trip del texto", () => {
+    const text = "Hola Ada,\n\nSegunda línea.\n\nGracias.";
+    const url = buildMailtoUrl({ to: "candidate@example.test", subject: "Asunto con espacios", text });
+    expect(url).toContain("%0D%0A");
+    expect(decodeURIComponent(url.split("&body=")[1])).toBe(text.replace(/\n/g, "\r\n"));
   });
 });
