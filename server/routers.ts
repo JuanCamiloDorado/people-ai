@@ -1,6 +1,6 @@
 import { COOKIE_NAME } from "@shared/const";
 import { AuthError, MIN_PASSWORD_LENGTH, SESSION_TTL_MS, changePassword, passwordAttemptKey, signIn, signSession, signUp, toPublicUser } from "./auth";
-import { acceptInvite, getInvitePreview, inviteUser, switchActiveCompany } from "./orgDomain";
+import { acceptInvite, getCompanyContact, getInvitePreview, inviteUser, switchActiveCompany, updateCompanyContact } from "./orgDomain";
 import type { TrpcContext } from "./_core/context";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -286,6 +286,34 @@ export const appRouter = router({
       // Techo de rol: impide que HR se fabrique un COMPANY_ADMIN.
       assertCanGrantRole(access, input.role);
       return toTrpc(() => inviteUser({ ...input, invitedByUserId: ctx.user.id }));
+    }),
+    /** Contacto de soporte que ve el candidato en su portal.
+     *
+     *  Vive en el router `company` y no en `hr` porque es configuracion de empresa, no de
+     *  un proceso de contratacion: la pestana de Contrataciones es solo donde se edita
+     *  hoy. Sin `toTrpc`: eso se reserva para los caminos que lanzan `AuthError`. */
+    contact: protectedProcedure.input(z.object({ companyId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const access = await resolveAccess(ctx.user);
+      assertRole(access, ["SUPER_ADMIN", "COMPANY_ADMIN", "HR"]);
+      assertCompanyScope(access, input.companyId);
+      return getCompanyContact(input.companyId);
+    }),
+    updateContact: protectedProcedure.input(z.object({
+      companyId: z.number().int().positive(),
+      // `.nullable()` y no cadena vacia: borrar el contacto es una operacion legitima y el
+      // cliente manda null explicito. Con `""` el `.email()` de zod lo rechazaria con un
+      // mensaje que hablaria de un correo invalido para lo que en realidad es un borrado.
+      // Los topes van pegados a las columnas (320 y 40): sin ellos MySQL en modo estricto
+      // rechaza el UPDATE entero.
+      candidateSupportEmail: z.string().trim().email("Correo de contacto invalido").max(320).nullable(),
+      // Texto libre: el formato colombiano admite indicativo, extension y lineas 01 8000.
+      // La normalizacion a `tel:` la hace `telHref` sobre este mismo texto.
+      candidateSupportPhone: z.string().trim().max(40).nullable(),
+    })).mutation(async ({ ctx, input }) => {
+      const access = await resolveAccess(ctx.user);
+      assertRole(access, ["SUPER_ADMIN", "COMPANY_ADMIN", "HR"]);
+      assertCompanyScope(access, input.companyId);
+      return updateCompanyContact(input.companyId, input, ctx.user.id);
     }),
     setActive: protectedProcedure.input(z.object({ companyId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
       // Sin assertCompanyScope a proposito: cambiar de empresa es justamente salir

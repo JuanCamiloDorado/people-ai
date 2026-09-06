@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Link } from "wouter";
-import { Plus, UserRound, FileText, ArrowUpRight, Trash2 } from "lucide-react";
+import { Plus, UserRound, FileText, ArrowUpRight, Trash2, Mail, Phone } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -20,6 +20,20 @@ export default function HiringPage() {
   const positions = trpc.positions.list.useQuery({ companyId }, { enabled: ready }); const templates = trpc.templates.list.useQuery({ companyId }, { enabled: ready }); const hiring = trpc.hiring.list.useQuery({ companyId }, { enabled: ready });
   const [positionId, setPositionId] = useState<string>(""); const [statusFilter, setStatusFilter] = useState("all"); const [positionFilter, setPositionFilter] = useState("all");
   const [processToDelete, setProcessToDelete] = useState<{ id: number; candidateName: string } | null>(null);
+  const contacto = trpc.company.contact.useQuery({ companyId }, { enabled: ready });
+  const [contactoOpen, setContactoOpen] = useState(false);
+  const [contactEmail, setContactEmail] = useState(""); const [contactPhone, setContactPhone] = useState("");
+  // Los inputs se siembran AL ABRIR el dialogo, no con un useEffect que siga a
+  // `contacto.data`: react-query refetch al recuperar el foco de la ventana, y ese efecto
+  // le borraria a la analista lo que este escribiendo a medio formulario.
+  const abrirContacto = () => {
+    setContactEmail(contacto.data?.candidateSupportEmail ?? ""); setContactPhone(contacto.data?.candidateSupportPhone ?? "");
+    setContactoOpen(true);
+  };
+  const guardarContacto = trpc.company.updateContact.useMutation({
+    onSuccess: () => { utils.company.contact.invalidate(); setContactoOpen(false); toast.success("Contacto de soporte actualizado"); },
+    onError: error => toast.error(error.message || "No fue posible guardar el contacto"),
+  });
   
   useEffect(() => {
     if (positions.data && positions.data.length > 0) {
@@ -161,6 +175,33 @@ export default function HiringPage() {
           </CardContent>
         </Card>
 
+        {/* Contacto de soporte del portal. Vive en esta pestana y no en una pagina de
+            ajustes porque es exactamente lo que el candidato ve al abrir el enlace que se
+            genera aqui: quien crea el proceso tiene que poder comprobarlo de un vistazo. */}
+        <Card>
+          <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base">Contacto de soporte del portal</CardTitle>
+              <p className="mt-1 text-sm text-slate-500">
+                El correo y el teléfono que ve el candidato para resolver dudas sobre sus documentos.
+              </p>
+            </div>
+            <Button type="button" variant="outline" onClick={abrirContacto} disabled={!ready}>
+              Editar contacto
+            </Button>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 text-sm sm:flex-row sm:gap-8">
+            <span className="flex items-center gap-2">
+              <Mail className="h-4 w-4 text-slate-400" />
+              {contacto.data?.candidateSupportEmail || <span className="text-slate-400">Sin configurar</span>}
+            </span>
+            <span className="flex items-center gap-2">
+              <Phone className="h-4 w-4 text-slate-400" />
+              {contacto.data?.candidateSupportPhone || <span className="text-slate-400">Sin configurar</span>}
+            </span>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -270,6 +311,84 @@ export default function HiringPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* DIALOG: Contacto de soporte del portal. */}
+      <Dialog open={contactoOpen} onOpenChange={open => { if (!open && !guardarContacto.isPending) setContactoOpen(false); }}>
+        <DialogContent className="sm:max-w-md">
+          <form
+            onSubmit={e => {
+              e.preventDefault();
+              // Vacio -> null: borrar el contacto es una operacion valida y el portal
+              // oculta esa linea. Enviar "" haria fallar el `.email()` de zod con un
+              // mensaje que hablaria de un correo invalido en vez de un borrado.
+              guardarContacto.mutate({
+                companyId,
+                candidateSupportEmail: contactEmail.trim() || null,
+                candidateSupportPhone: contactPhone.trim() || null,
+              });
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle className="text-lg font-bold text-slate-900">
+                Contacto de soporte del portal
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500 pt-2">
+                Aparece en la tarjeta "¿Dudas con un documento?" del portal del candidato. Deja un
+                campo vacío para no ofrecer ese canal.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-4">
+              <div>
+                <Label htmlFor="contacto-correo">Correo de contacto</Label>
+                <Input
+                  id="contacto-correo"
+                  type="email"
+                  maxLength={320}
+                  value={contactEmail}
+                  onChange={e => setContactEmail(e.target.value)}
+                  placeholder="talento@empresa.com"
+                  className="mt-1.5"
+                />
+              </div>
+              <div>
+                <Label htmlFor="contacto-telefono">Teléfono de contacto</Label>
+                <Input
+                  id="contacto-telefono"
+                  type="tel"
+                  maxLength={40}
+                  value={contactPhone}
+                  onChange={e => setContactPhone(e.target.value)}
+                  placeholder="+57 (601) 000 0000"
+                  className="mt-1.5"
+                />
+                <p className="mt-1.5 text-xs text-slate-500">
+                  Escríbelo como quieras que se lea. El enlace para llamar se genera con este mismo
+                  número.
+                </p>
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setContactoOpen(false)}
+                disabled={guardarContacto.isPending}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={guardarContacto.isPending}
+                className="bg-slate-900 text-white hover:bg-slate-800"
+              >
+                {guardarContacto.isPending ? "Guardando..." : "Guardar contacto"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* DIALOG: Confirmar eliminacion de la contratacion. El borrado es fisico, asi que
           el texto tiene que enumerar lo que se pierde: al analista no le queda ningun

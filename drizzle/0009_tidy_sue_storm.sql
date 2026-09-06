@@ -1,0 +1,13 @@
+-- Contacto de soporte del portal del candidato: `companies.candidateSupportEmail` y
+-- `companies.candidateSupportPhone`.
+--
+-- Nota: `drizzle-kit generate` emitio aqui los dos ALTER TABLE de `companies` y, ademas,
+-- `hiring_processes.documentDeadline` y `hiring_requirements.allowedMimeTypes`, que son
+-- deriva anterior a este cambio. Se retiraron los cuatro a proposito, igual que en 0007:
+-- `ensureSchema()` (server/db.ts) los aplica en caliente en la primera conexion, de modo
+-- que toda base viva ya los tiene y el ADD abortaria la migracion entera, llevandose por
+-- delante `pnpm db:push`.
+--
+-- El snapshot `meta/0009_snapshot.json` SI se conserva: sin el, el proximo `generate` de
+-- cualquiera volveria a emitir estas columnas dentro de SU migracion, que abortaria por el
+-- mismo motivo. Esa deriva queda igual que antes de este cambio; no se corrige aqui.

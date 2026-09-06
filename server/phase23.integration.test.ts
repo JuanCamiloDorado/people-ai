@@ -43,6 +43,10 @@ describe("Fases 2 y 3 — contratos de flujo", () => {
     await expect(appRouter.createCaller(context("HR")).hiring.detail({ companyId: 5, processId: 1 })).rejects.toThrow();
     expect(() => assertRole({ role: "EMPLOYEE", companyId: 4 }, ["HR"])).toThrow();
     expect(() => assertCompanyScope({ role: "HR", companyId: 4 }, 5)).toThrow();
+    // El contacto de soporte se publica a los candidatos: escribirlo cross-tenant seria
+    // cambiar el correo y el telefono que otra empresa ensena en sus enlaces.
+    await expect(appRouter.createCaller(context("HR")).company.updateContact({ companyId: 5, candidateSupportEmail: null, candidateSupportPhone: null })).rejects.toThrow();
+    await expect(appRouter.createCaller(context("EMPLOYEE")).company.contact({ companyId: 4 })).rejects.toThrow();
   });
 
   it("detecta documentos obligatorios faltantes antes del envío", () => {

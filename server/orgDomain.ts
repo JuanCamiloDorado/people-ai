@@ -29,7 +29,7 @@ import {
   verifyPassword,
 } from "./auth";
 import { writeAudit } from "./auditLog";
-import { getUserByEmail, requireDb } from "./db";
+import { getDb, getUserByEmail, requireDb } from "./db";
 import { hashOpaqueToken, isTokenUsable } from "./tokens";
 
 /** Misma duracion que los enlaces de candidato. */
@@ -375,4 +375,64 @@ export async function switchActiveCompany(
     .update(users)
     .set({ activeCompanyId: companyId })
     .where(eq(users.id, userId));
+}
+
+// ------------------------------------------ contacto de soporte del portal
+
+/** Contacto de soporte que el portal publica a los candidatos.
+ *
+ *  Lectura tolerante (`getDb`, no `requireDb`): sin base, la tarjeta de Contrataciones se
+ *  pinta vacia en vez de tumbar la pagina entera. La escritura de abajo si exige conexion:
+ *  un "Guardado" que no guardo nada es peor que un error.
+ *
+ *  `companies` es la unica tabla donde su propio `id` ES la clave de tenant: no hay una
+ *  columna `companyId` que anadir al WHERE como defensa en profundidad. El
+ *  `eq(companies.id, companyId)` ya es el filtro multi-tenant completo. */
+export async function getCompanyContact(companyId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const row = (
+    await db
+      .select({
+        id: companies.id,
+        candidateSupportEmail: companies.candidateSupportEmail,
+        candidateSupportPhone: companies.candidateSupportPhone,
+      })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1)
+  )[0];
+  return row ?? null;
+}
+
+/** Guarda el contacto de soporte y devuelve la entidad releida.
+ *
+ *  Cadena vacia -> null antes de escribir: el portal distingue "sin configurar" (oculta la
+ *  linea) de un valor real, y guardar "" dejaria un `mailto:` roto en la pantalla del
+ *  candidato.
+ *
+ *  El telefono es texto libre a proposito -- el formato colombiano admite indicativo,
+ *  extension y lineas 01 8000 -- y el `href` del `tel:` se deriva de este mismo texto con
+ *  `telHref` (shared/contacto.ts), asi que el numero que se lee y el que se marca no
+ *  pueden divergir. */
+export async function updateCompanyContact(
+  companyId: number,
+  input: { candidateSupportEmail: string | null; candidateSupportPhone: string | null },
+  userId?: number
+) {
+  const db = await requireDb();
+  const candidateSupportEmail = input.candidateSupportEmail?.trim() || null;
+  const candidateSupportPhone = input.candidateSupportPhone?.trim() || null;
+  await db
+    .update(companies)
+    .set({ candidateSupportEmail, candidateSupportPhone, updatedAt: new Date() })
+    .where(eq(companies.id, companyId));
+  await writeAudit({
+    companyId,
+    userId,
+    action: "company_contact_updated",
+    module: AUDIT_MODULE,
+    metadata: { candidateSupportEmail, candidateSupportPhone },
+  });
+  return getCompanyContact(companyId);
 }
