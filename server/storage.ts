@@ -252,3 +252,65 @@ export async function storageGetBytes(relKey: string): Promise<Uint8Array> {
     fallo("storageGetBytes", error);
   }
 }
+
+/** Borra objetos del bucket. A diferencia de las otras tres operaciones NO pasa por
+ *  `fallo()` ni lanza: devuelve que se borro y que no.
+ *
+ *  Su unico llamador es `deleteHiring`, y cuando llega aqui la transaccion que borro el
+ *  proceso YA esta confirmada. Lanzar le diria al analista "no se elimino" sobre algo
+ *  que si se elimino, y le empujaria a reintentar contra un proceso inexistente. La
+ *  invariante 2 de la cabecera se cumple aqui con mas fuerza que en el resto del modulo:
+ *  no se propaga absolutamente nada al cliente; el error del proveedor y las claves solo
+ *  llegan al log.
+ *
+ *  De ahi tambien que en `deleteHiring` el orden sea commit primero y bucket despues, y
+ *  nunca al reves: un objeto huerfano cuesta almacenamiento, pero una fila de
+ *  candidate_documents apuntando a un objeto que ya no existe es un expediente roto que
+ *  sigue ofreciendo "Descargar" y firma una URL perfectamente valida hacia un 404.
+ *
+ *  Un `DeleteObjectCommand` por clave y no un `DeleteObjectsCommand` por lote:
+ *  `DeleteObjects` exige `Content-MD5` por spec, y desde la v3.729 el SDK manda
+ *  `x-amz-checksum-crc32` en su lugar, que varios backends compatibles rechazan
+ *  (aws-sdk-js-v3#6920). Aqui el proveedor es una variable de entorno -- ver la nota
+ *  sobre la rotura de R2 con CRC32 en `getSdk()` -- y `DeleteObject` no tiene ningun
+ *  requisito de checksum, ademas de ser idempotente: 204 sobre una clave que ya no
+ *  existe. El tope de 1000 por lote no llega a aplicar con decenas de documentos por
+ *  expediente. Si algun dia hay que borrar una empresa entera, el cambio es
+ *  `DeleteObjectsCommand` MAS `requestChecksumCalculation: "WHEN_REQUIRED"`. */
+export async function storageDelete(
+  relKeys: string[]
+): Promise<{ eliminados: number; fallidos: string[] }> {
+  // Antes de tocar `getSdk()`: es lo que permite eliminar una contratacion sin
+  // documentos en un entorno sin STORAGE_S3_*, que es el estado por defecto en local.
+  if (!relKeys.length) return { eliminados: 0, fallidos: [] };
+
+  let sdk: Awaited<ReturnType<typeof getSdk>>;
+  try {
+    sdk = await getSdk();
+  } catch (error) {
+    // Un solo registro y no N identicos: la causa es la misma para todas las claves.
+    console.error(
+      `[Almacenamiento] Fallo en storageDelete: cliente no disponible. Quedan sin borrar ${relKeys.length} objeto(s): ${relKeys.join(", ")}`,
+      error
+    );
+    return { eliminados: 0, fallidos: [...relKeys] };
+  }
+
+  const bucket = getStorageConfig().bucket;
+  const fallidos: string[] = [];
+  let eliminados = 0;
+  // Secuencial a proposito: son unidades, no miles, y lo dispara una persona a mano.
+  for (const relKey of relKeys) {
+    const key = normalizeKey(relKey);
+    try {
+      await sdk.client.send(new sdk.mod.DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      eliminados += 1;
+    } catch (error) {
+      // La clave completa en el log es lo unico que permite localizar despues un
+      // documento personal que quedo en el bucket: su `fileKey` ya no existe en base.
+      fallidos.push(relKey);
+      console.error(`[Almacenamiento] Fallo en storageDelete de "${key}":`, error);
+    }
+  }
+  return { eliminados, fallidos };
+}

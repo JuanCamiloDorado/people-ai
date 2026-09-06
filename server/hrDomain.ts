@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
-import { aiConversationMessages, auditLogs, candidateAccessLinks, candidateDocuments, candidateProfiles, candidateOtpChallenges, companies, communicationLogs, companyCommunicationSettings, documentTemplateItems, documentTemplates, hiringProcesses, hiringRequirements, internalNotifications, jobPositions, processActivities } from "../drizzle/schema";
+import { aiAnalysisRuns, aiConversationMessages, aiConversations, aiDocumentFindings, aiHiringSummaries, aiInsights, auditLogs, candidateAccessLinks, candidateDocuments, candidateProfiles, candidateOtpChallenges, companies, communicationLogs, companyCommunicationSettings, documentTemplateItems, documentTemplates, hiringProcesses, hiringRequirements, internalNotifications, jobPositions, processActivities } from "../drizzle/schema";
 import { getDb } from "./db";
 import { hashOpaqueToken, isTokenUsable } from "./tokens";
-import { storageGetBytes, storageGetSignedUrl, storagePut } from "./storage";
+import { storageDelete, storageGetBytes, storageGetSignedUrl, storagePut } from "./storage";
 import { prepareMailtoEmail } from "./emailService";
 import { buildCandidateEmailText, candidateEmailSubject, formatDeadline } from "../shared/candidateEmail";
 import JSZip from "jszip";
@@ -524,6 +524,104 @@ export async function updateHiringDeadline(companyId: number, processId: number,
   await db.update(hiringProcesses).set({ documentDeadline: deadlineDate }).where(and(eq(hiringProcesses.companyId, companyId), eq(hiringProcesses.id, processId)));
   await audit(companyId, "hiring_process_deadline_updated", { processId, documentDeadline: deadlineDate }, userId);
   return getHiringDetail(companyId, processId);
+}
+/** Borrado FISICO de una contratacion y de todo lo que cuelga de ella.
+ *
+ *  Es la unica operacion destructiva-fisica del sistema: `deletePosition` y
+ *  `deleteTemplate` son soft-delete a `status: "archived"`. Se eligio fisico porque un
+ *  soft-delete obligaria a filtrar el estado en TODOS los caminos de lectura -- listado,
+ *  estadisticas del dashboard, notificaciones, enlaces por vencer, portal del candidato,
+ *  IA -- y olvidar uno deja un proceso "eliminado" que sigue vivo a medias. Asi la fila
+ *  desaparece y no queda ningun sitio donde pueda reaparecer.
+ *
+ *  Como la base NO tiene foreign keys (ver CLAUDE.md), la cascada es manual: cada tabla
+ *  hija se borra a mano y con `companyId` en el WHERE ademas de `processId`.
+ *
+ *  `userId` es obligatorio, a diferencia de `deletePosition`: el `audit_logs` es el unico
+ *  rastro que sobrevive, asi que no puede quedarse sin autor.
+ *
+ *  TRES TRAMPAS, las tres por imitar a las funciones vecinas de este archivo:
+ *
+ *  1. Las `fileKey` se leen SIN filtrar `status = "active"`. El resto del archivo si lo
+ *     filtra (`getHiringDetail`, `getDocumentUrl`), pero `uploadPortalDocument` marca la
+ *     version anterior como "removed" sin borrar el objeto: con el filtro, cada documento
+ *     que el candidato reemplazo quedaria en el bucket para siempre y ya sin forma de
+ *     localizarlo, porque su `fileKey` solo vive en esta fila.
+ *  2. NO se usa `getHiringDetail()`, aunque casi todas las hermanas empiecen por ahi: esa
+ *     funcion ESCRIBE (sincroniza requisitos con la plantilla vigente) y ademas filtra
+ *     documentos activos. Emitiria UPDATEs contra filas que estamos a punto de borrar.
+ *  3. NO se llama a `activity()`. Insertaria en `process_activities` con el `processId`
+ *     recien borrado, recreando exactamente la fila huerfana que la transaccion elimino.
+ *     El rastro va solo a `audit_logs`, que no cuelga del proceso.
+ *
+ *  Y `audit()` va FUERA de la transaccion: hace su propio `getDb()` y tomaria una segunda
+ *  conexion del pool mientras la primera sigue abierta. */
+export async function deleteHiring(companyId: number, processId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return { success: true as const, id: processId, candidateName: "Candidato", documentosBorrados: 0, avisoAlmacenamiento: false };
+
+  // Leer antes de borrar: despues del commit las claves son irrecuperables. `storagePut`
+  // les anade un sufijo aleatorio, asi que no se pueden reconstruir a partir de los ids.
+  const process = (await db.select().from(hiringProcesses).where(and(eq(hiringProcesses.companyId, companyId), eq(hiringProcesses.id, processId))).limit(1))[0];
+  if (!process) throw new Error("Contratación no encontrada");
+  const candidate = (await db.select().from(candidateProfiles).where(and(eq(candidateProfiles.companyId, companyId), eq(candidateProfiles.id, process.candidateId))).limit(1))[0];
+  const fileKeys = (await db.select({ fileKey: candidateDocuments.fileKey }).from(candidateDocuments).where(and(eq(candidateDocuments.companyId, companyId), eq(candidateDocuments.processId, processId)))).map(row => row.fileKey);
+
+  await db.transaction(async tx => {
+    // Hijas primero y `hiring_processes` al final. Al no haber foreign keys el orden da
+    // igual para la integridad, pero decide el modo de fallo: si esta transaccion se
+    // parte alguna vez, el estado resultante es "el proceso sigue en la lista, se puede
+    // reintentar" en vez de "huerfanos invisibles sin padre".
+    await tx.delete(aiDocumentFindings).where(and(eq(aiDocumentFindings.companyId, companyId), eq(aiDocumentFindings.processId, processId)));
+    await tx.delete(aiAnalysisRuns).where(and(eq(aiAnalysisRuns.companyId, companyId), eq(aiAnalysisRuns.processId, processId)));
+    await tx.delete(aiHiringSummaries).where(and(eq(aiHiringSummaries.companyId, companyId), eq(aiHiringSummaries.processId, processId)));
+    // `ai_insights` se borra en vez de desvincularse aunque `processId` sea nullable: su
+    // `dedupeKey` lleva dentro el processId, asi que una fila con processId a NULL
+    // ocuparia para siempre una entrada del unique (companyId, dedupeKey) que ya nadie
+    // puede regenerar ni alcanzar.
+    await tx.delete(aiInsights).where(and(eq(aiInsights.companyId, companyId), eq(aiInsights.processId, processId)));
+    // Idem las notificaciones: su unico contenido util es el enlace a la contratacion.
+    await tx.delete(internalNotifications).where(and(eq(internalNotifications.companyId, companyId), eq(internalNotifications.processId, processId)));
+    await tx.delete(candidateOtpChallenges).where(and(eq(candidateOtpChallenges.companyId, companyId), eq(candidateOtpChallenges.processId, processId)));
+    await tx.delete(communicationLogs).where(and(eq(communicationLogs.companyId, companyId), eq(communicationLogs.processId, processId)));
+    await tx.delete(processActivities).where(and(eq(processActivities.companyId, companyId), eq(processActivities.processId, processId)));
+    // El `tokenHash` da acceso al portal: dejarlo vivo seria mantener un secreto activo
+    // contra un proceso que ya no existe.
+    await tx.delete(candidateAccessLinks).where(and(eq(candidateAccessLinks.companyId, companyId), eq(candidateAccessLinks.processId, processId)));
+    await tx.delete(candidateDocuments).where(and(eq(candidateDocuments.companyId, companyId), eq(candidateDocuments.processId, processId)));
+    await tx.delete(hiringRequirements).where(and(eq(hiringRequirements.companyId, companyId), eq(hiringRequirements.processId, processId)));
+
+    // Las conversaciones del asistente se DESVINCULAN, no se borran: pertenecen a un
+    // usuario, no al proceso. `listAiConversations` no filtra por processId, sus mensajes
+    // cuelgan de `conversationId` y alimentan la metrica de consultas del dashboard.
+    // Eliminar la contratacion de un candidato no autoriza a borrar el historial de chat
+    // de un empleado; una conversacion sin proceso es justo lo que ese campo nullable ya
+    // modela.
+    await tx.update(aiConversations).set({ processId: null }).where(and(eq(aiConversations.companyId, companyId), eq(aiConversations.processId, processId)));
+
+    await tx.delete(hiringProcesses).where(and(eq(hiringProcesses.companyId, companyId), eq(hiringProcesses.id, processId)));
+
+    // El perfil solo se borra si no lo usa otro proceso. Hoy `createHiring` inserta uno
+    // por contratacion (relacion 1:1) y la consulta siempre sale vacia, pero el guard es
+    // lo correcto el dia que se deduplique por numero de identificacion. Va DESPUES del
+    // delete del proceso a proposito: al reves, dos borrados concurrentes de procesos que
+    // compartan candidato se verian el uno al otro y ninguno borraria el perfil.
+    const otrosProcesos = await tx.select({ id: hiringProcesses.id }).from(hiringProcesses).where(and(eq(hiringProcesses.companyId, companyId), eq(hiringProcesses.candidateId, process.candidateId))).limit(1);
+    if (!otrosProcesos.length) await tx.delete(candidateProfiles).where(and(eq(candidateProfiles.companyId, companyId), eq(candidateProfiles.id, process.candidateId)));
+  });
+
+  // El bucket SIEMPRE despues del commit, nunca antes. `storageDelete` no lanza: si el
+  // proveedor falla quedan objetos huerfanos (coste de almacenamiento), mientras que
+  // borrarlos primero y abortar la transaccion dejaria filas de candidate_documents
+  // apuntando a objetos inexistentes -- un expediente que sigue ofreciendo "Descargar" y
+  // firma una URL perfectamente valida hacia un 404.
+  const { eliminados, fallidos } = await storageDelete(fileKeys);
+
+  // Las claves fallidas van en el metadata porque son el unico rastro consultable de un
+  // documento personal que quedo en el bucket: el log rota, `audit_logs` no.
+  await audit(companyId, "hiring_process_deleted", { processId, candidateId: process.candidateId, candidateName: candidate?.fullName ?? null, documentos: fileKeys.length, objetosEliminados: eliminados, objetosFallidos: fallidos }, userId);
+
+  return { success: true as const, id: processId, candidateName: candidate?.fullName ?? "Candidato", documentosBorrados: eliminados, avisoAlmacenamiento: fallidos.length > 0 };
 }
 export async function getHiringDetail(companyId: number, processId: number) {
   const db = await getDb();
