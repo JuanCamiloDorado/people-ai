@@ -33,6 +33,14 @@ describe("Fases 2 y 3 — seguridad y documentos", () => {
     expect(() => assertRole({ role: "HR", companyId: 4 }, ["HR"])).not.toThrow();
   });
 
+  it("el borrado de una contratación no revienta sin base de datos", async () => {
+    // Como el resto del módulo, `deleteHiring` tiene que degradar en vez de lanzar cuando
+    // `getDb()` devuelve undefined: sin esta rama, abrir la página sin base tumbaría la
+    // mutation con un error de infraestructura en lugar de un no-op.
+    const { deleteHiring } = await import("./hrDomain");
+    await expect(deleteHiring(4, 1, 1)).resolves.toMatchObject({ success: true, id: 1, avisoAlmacenamiento: false });
+  });
+
   it("calcula estructura de estadísticas del dashboard", async () => {
     const { getDashboardStats } = await import("./hrDomain");
     const stats = await getDashboardStats(4);
