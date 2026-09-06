@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowUpRight, Plus, Trash2, UserRound } from "lucide-react";
+import { ArrowRight, Plus, Trash2, UserRound } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
@@ -65,6 +65,15 @@ export default function HiringProcessesCard({
   });
 
   const rows = hiring.data?.filter(row => (statusFilter === "all" || row.status === statusFilter) && (positionFilter === "all" || String(row.positionId) === positionFilter)) || [];
+  // El subtitulo decia "N proceso(s) en este tenant.": "tenant" es jerga de programador
+  // delante del usuario, el "(s)" es un plural perezoso y el numero era el de las filas ya
+  // filtradas mientras el texto sugeria el total de la empresa. Con filtro puesto ahora se
+  // dicen las dos cifras, que es justo cuando la diferencia importa.
+  const total = hiring.data?.length ?? 0;
+  const hayFiltro = statusFilter !== "all" || positionFilter !== "all";
+  const resumen = hayFiltro
+    ? `${rows.length} de ${total} ${total === 1 ? "proceso" : "procesos"}`
+    : `${total} ${total === 1 ? "proceso" : "procesos"}`;
   // `isLoading` de react-query v5 es `isPending && isFetching`: con `enabled: false` vale
   // FALSE, asi que mientras se resolvia la empresa activa la tabla se pintaba vacia --
   // "No hay procesos con estos filtros" -- y luego saltaba a las filas. Se suma el
@@ -77,11 +86,16 @@ export default function HiringProcessesCard({
   return (
     <>
       <Card>
-        <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
+        {/* `flex flex-col` explicito, como en HiringDetailPage y PositionsPage: `CardHeader`
+            trae `display: grid`, asi que el `sm:flex-row` que habia aqui no hacia nada --
+            tailwind-merge conserva las dos clases porque no chocan y gana el grid. Resultado:
+            los filtros caian debajo del titulo y pegados a la izquierda en vez de ir a la
+            derecha, en la misma linea. */}
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle className="text-base">Procesos recientes</CardTitle>
             <p className="mt-1 text-sm text-slate-500">
-              {cargando ? "Cargando procesos…" : `${rows.length} proceso(s) en este tenant.`}
+              {cargando ? "Cargando procesos…" : resumen}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
@@ -110,13 +124,21 @@ export default function HiringProcessesCard({
               </SelectContent>
             </Select>
             {conBotonNuevaContratacion && (
-              <Button
-                size="sm"
-                onClick={() => setLocation("/hr/contrataciones")}
-                className="bg-slate-950 text-white hover:bg-slate-800"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />Nueva contratación
-              </Button>
+              <>
+                {/* Crear no es filtrar. El boton es lo mas pesado de la tarjeta -- negro
+                    solido junto a dos selects neutros -- y en fila con ellos se leia como
+                    un tercer filtro. El separador lo saca del grupo sin mandarlo a otra
+                    esquina. Se oculta por debajo de `sm`, donde la cabecera se apila y una
+                    linea vertical suelta no separaria nada. */}
+                <span className="mx-1 hidden h-6 w-px shrink-0 bg-slate-200 sm:block" aria-hidden="true" />
+                <Button
+                  size="sm"
+                  onClick={() => setLocation("/hr/contrataciones")}
+                  className="bg-slate-950 text-white hover:bg-slate-800"
+                >
+                  <Plus />Nueva contratación
+                </Button>
+              </>
             )}
           </div>
         </CardHeader>
@@ -180,9 +202,11 @@ export default function HiringProcessesCard({
                     )}
                   </div>
                   {/* `relative z-10` levanta la celda por encima del enlace estirado:
-                      sin esto el overlay del ::after se comeria el clic del boton. */}
-                  <div className="relative z-10 flex items-center justify-end gap-1">
-                    <ArrowUpRight className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                      sin esto el overlay del ::after se comeria el clic del boton.
+                      Aqui hubo una flecha decorativa (`aria-hidden`) que parecia el boton
+                      de abrir el detalle y no lo era: quien abre la fila es el enlace
+                      estirado, asi que el icono solo prometia un clic que no existia. */}
+                  <div className="relative z-10 flex items-center justify-end">
                     <Button
                       type="button"
                       variant="ghost"
@@ -210,14 +234,24 @@ export default function HiringProcessesCard({
           )}
 
           {conEnlaceVerContrataciones && (
-            <div className="flex justify-end p-4">
+            // Antes era un enlace fantasma en `text-xs` flotando en el hueco bajo la ultima
+            // fila: se leia como texto suelto y no como algo pulsable. Ahora es un boton
+            // `outline` como los demas del dashboard, alineado con el `px-5` de las filas y
+            // sin relleno inferior, porque la <Card> ya aporta el suyo (`py-6`).
+            <div className="flex justify-end px-5 pt-4">
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 onClick={() => setLocation("/hr/contrataciones")}
-                className="text-xs text-slate-600 hover:text-slate-900"
+                className="group text-slate-600 hover:text-slate-900"
               >
-                Ver contrataciones <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+                Ver contrataciones
+                {/* `ArrowRight` y no `ArrowUpRight`: no se abre nada aparte, se continua
+                    hacia el listado. Se le quitaron el `ml-1` -- que peleaba con el
+                    `gap-1.5` de la variante `sm` -- y el `h-3.5 w-3.5`, que no llegaba a
+                    aplicarse: `[&_svg:not([class*='size-'])]:size-4` del boton gana por
+                    especificidad. */}
+                <ArrowRight className="transition-transform group-hover:translate-x-0.5" />
               </Button>
             </div>
           )}
