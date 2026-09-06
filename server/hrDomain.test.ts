@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALLOWED_MIME_TYPES, MAX_FILE_BYTES, hasMagicSignature, hashToken, isValidUpload, normalize } from "./hrDomain";
+import { ALLOWED_MIME_TYPES, MAX_FILE_BYTES, MAX_ZIP_BYTES, hasMagicSignature, hashToken, isValidUpload, normalize, uniqueZipName } from "./hrDomain";
 import { assertCompanyScope, assertRole } from "./authorization";
 
 describe("Fases 2 y 3 — seguridad y documentos", () => {
@@ -239,4 +239,35 @@ describe("Fases 2 y 3 — seguridad y documentos", () => {
   });
 });
 
+describe("descarga del expediente comprimido", () => {
+  it("desambigua nombres repetidos en vez de dejar que JSZip los pise", () => {
+    // `normalize()` produce `${titulo}.${ext}`, asi que dos requisitos con el mismo
+    // titulo daban el mismo nombre y JSZip sobrescribia en silencio: un documento
+    // desaparecia del expediente sin ningun error.
+    const usados = new Set<string>();
+    expect(uniqueZipName(usados, "Certificado laboral.pdf")).toBe("Certificado laboral.pdf");
+    expect(uniqueZipName(usados, "Certificado laboral.pdf")).toBe("Certificado laboral-2.pdf");
+    expect(uniqueZipName(usados, "Certificado laboral.pdf")).toBe("Certificado laboral-3.pdf");
+    expect(uniqueZipName(usados, "Otro.pdf")).toBe("Otro.pdf");
+  });
 
+  it("desambigua tambien cuando el nombre no tiene extension", () => {
+    const usados = new Set<string>();
+    expect(uniqueZipName(usados, "Anexo")).toBe("Anexo");
+    expect(uniqueZipName(usados, "Anexo")).toBe("Anexo-2");
+  });
+
+  it("no colisiona con un nombre que ya termina en el sufijo de desambiguacion", () => {
+    const usados = new Set<string>();
+    expect(uniqueZipName(usados, "Contrato.pdf")).toBe("Contrato.pdf");
+    expect(uniqueZipName(usados, "Contrato-2.pdf")).toBe("Contrato-2.pdf");
+    expect(uniqueZipName(usados, "Contrato.pdf")).toBe("Contrato-3.pdf");
+  });
+
+  it("el tope del ZIP deja margen dentro de los 512 MB del contenedor", () => {
+    // El pico ronda 3,3 veces la suma (documentos + ZIP + su base64 en la respuesta
+    // tRPC). Si alguien sube este valor, que sea con esa cuenta delante.
+    expect(MAX_ZIP_BYTES).toBe(40 * 1024 * 1024);
+    expect(MAX_ZIP_BYTES * 3.3).toBeLessThan(200 * 1024 * 1024);
+  });
+});

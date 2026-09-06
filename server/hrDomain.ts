@@ -3,11 +3,18 @@ import { createHash, randomBytes } from "node:crypto";
 import { aiConversationMessages, auditLogs, candidateAccessLinks, candidateDocuments, candidateProfiles, candidateOtpChallenges, companies, communicationLogs, companyCommunicationSettings, documentTemplateItems, documentTemplates, hiringProcesses, hiringRequirements, internalNotifications, jobPositions, processActivities } from "../drizzle/schema";
 import { getDb } from "./db";
 import { hashOpaqueToken, isTokenUsable } from "./tokens";
-import { storageGetSignedUrl, storagePut } from "./storage";
+import { storageGetBytes, storageGetSignedUrl, storagePut } from "./storage";
 import { prepareMailtoEmail } from "./emailService";
 import JSZip from "jszip";
 
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** Tope del expediente completo, medido sobre el `sizeBytes` de la base antes de
+ *  tocar el bucket. `downloadHiringZip` mantiene a la vez los N documentos, el ZIP y
+ *  su base64 en la respuesta tRPC; con PDF y JPEG, que apenas comprimen, el pico
+ *  ronda 3,3 veces la suma. 40 MB dejan ese pico en ~130 MB, holgado dentro de los
+ *  512 MB del contenedor. Sin este tope un expediente grande provocaba un OOM que
+ *  tumbaba el servicio para TODAS las empresas, no solo para quien pulso el boton. */
+export const MAX_ZIP_BYTES = 40 * 1024 * 1024;
 export const ALL_SUPPORTED_MIME_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -477,17 +484,34 @@ export async function uploadPortalDocument(token: string, requirementId: number,
     throw new Error("Archivo inválido: formato no admitido para este requisito o tamaño no permitido");
   }
   const normalizedName = normalize(requirement.title, originalName);
-  const key = `candidate-documents/${portal.process.companyId}/${portal.process.id}/${requirement.id}-${randomBytes(12).toString("hex")}-${normalizedName}`;
-  const stored = await storagePut(key, Buffer.from(bytes), mimeType);
+  // Clave opaca: solo identificadores y azar, nunca el nombre del archivo. El nombre
+  // normalizado conserva espacios y acentos (`Cedula de ciudadania.pdf`), legal en S3
+  // pero fuente clasica de fallos de firma y codificacion entre proveedores. Lo que ve
+  // el usuario al guardar lo fija `Content-Disposition`, que `storagePut` escribe en el
+  // objeto con el cuarto argumento. La extension sale del nombre normalizado, que
+  // `isValidUpload` ya comprobo contra el MIME declarado.
+  const punto = normalizedName.lastIndexOf(".");
+  const extension = punto === -1 ? "" : normalizedName.slice(punto);
+  const key = `candidate-documents/${portal.process.companyId}/${portal.process.id}/${requirement.id}-${randomBytes(12).toString("hex")}${extension}`;
+  // La columna existia desde el primer esquema y nunca se escribia. Los bytes ya estan
+  // en memoria, asi que calcularlo no cuesta nada y da integridad verificable.
+  const checksum = createHash("sha256").update(bytes).digest("hex");
+  const stored = await storagePut(key, Buffer.from(bytes), mimeType, normalizedName);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await db.update(candidateDocuments).set({ status: "removed" }).where(and(eq(candidateDocuments.companyId, portal.process.companyId), eq(candidateDocuments.requirementId, requirementId), eq(candidateDocuments.processId, portal.process.id), eq(candidateDocuments.status, "active")));
-  await db.insert(candidateDocuments).values({ companyId: portal.process.companyId, processId: portal.process.id, requirementId, originalName, normalizedName, fileKey: stored.key, mimeType, sizeBytes: bytes.byteLength });
+  await db.insert(candidateDocuments).values({ companyId: portal.process.companyId, processId: portal.process.id, requirementId, originalName, normalizedName, fileKey: stored.key, mimeType, sizeBytes: bytes.byteLength, checksum });
   await db.update(hiringRequirements).set({ status: "uploaded" }).where(and(eq(hiringRequirements.companyId, portal.process.companyId), eq(hiringRequirements.id, requirementId)));
   await audit(portal.process.companyId, "candidate_document_uploaded", { processId: portal.process.id, requirementId, normalizedName });
   await activity(portal.process.companyId, portal.process.id, "document_uploaded", "candidate", undefined, { requirementId });
   return getPortal(token);
 }
+// Borrado logico a proposito: la fila se queda en `removed` como evidencia de
+// auditoria. Consecuencia conocida: los bytes quedan huerfanos en el bucket. No se
+// borra el objeto porque la accion la dispara un actor anonimo con un token de portal,
+// es irreversible, y la sustitucion de documento marca `removed` igual que este
+// borrado, asi que una llamada suelta a DeleteObject no distinguiria los dos casos.
+// Cuando exista una politica de retencion, ese es su sitio, no este.
 export async function removePortalDocument(token: string, requirementId: number) { const portal = await getPortal(token, false); if (!portal) throw new Error("Enlace no disponible"); const db = await getDb(); if (!db) throw new Error("Database unavailable"); await db.update(candidateDocuments).set({ status: "removed" }).where(and(eq(candidateDocuments.companyId, portal.process.companyId), eq(candidateDocuments.processId, portal.process.id), eq(candidateDocuments.requirementId, requirementId), eq(candidateDocuments.status, "active"))); await db.update(hiringRequirements).set({ status: "removed" }).where(and(eq(hiringRequirements.companyId, portal.process.companyId), eq(hiringRequirements.processId, portal.process.id), eq(hiringRequirements.id, requirementId))); await audit(portal.process.companyId, "candidate_document_removed", { processId: portal.process.id, requirementId }); await activity(portal.process.companyId, portal.process.id, "document_removed", "candidate", undefined, { requirementId }); return getPortal(token); }
 export async function getPortalDocumentUrl(token: string, requirementId: number) { const portal = await getPortal(token, false); if (!portal) throw new Error("Enlace no disponible"); const doc = portal.documents.find(d => d.requirementId === requirementId); if (!doc) throw new Error("Documento no encontrado"); const url = await storageGetSignedUrl(doc.fileKey); return { url, originalName: doc.originalName, mimeType: doc.mimeType }; }
 export async function listNotifications(companyId: number, recipientUserId: number) { const db = await getDb(); if (!db) return []; return db.select().from(internalNotifications).where(and(eq(internalNotifications.companyId, companyId), eq(internalNotifications.recipientUserId, recipientUserId))).orderBy(desc(internalNotifications.createdAt)); }
@@ -511,7 +535,49 @@ export const prepareCandidateEmail = (companyId: number, processId: number, user
 export const prepareCandidateReminder = (companyId: number, processId: number, userId: number, portalUrl: string) => prepareProcessCommunication(companyId, processId, userId, "reminder", portalUrl);
 
 export async function createZipArchive(files: Array<{ name: string; bytes: Uint8Array }>) { const zip = new JSZip(); for (const file of files) zip.file(file.name, file.bytes); return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }); }
-export async function downloadHiringZip(companyId: number, processId: number, userId: number) { const detail = await getHiringDetail(companyId, processId); if (!detail) throw new Error("Hiring process not found"); const files: Array<{ name: string; bytes: Uint8Array }> = []; for (const document of detail.documents) { const signedUrl = await storageGetSignedUrl(document.fileKey); const response = await fetch(signedUrl); if (!response.ok) throw new Error(`No se pudo descargar ${document.normalizedName}`); files.push({ name: document.normalizedName, bytes: new Uint8Array(await response.arrayBuffer()) }); } const archive = await createZipArchive(files); await audit(companyId, "hiring_archive_downloaded", { processId, documentCount: detail.documents.length }, userId); await activity(companyId, processId, "archive_downloaded", "analyst", userId, { documentCount: detail.documents.length }); return { filename: `${(detail.candidate?.fullName || "candidato").replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]/g, "_")}_expediente.zip`, base64: archive.toString("base64"), documentCount: detail.documents.length }; }
+/** Nombre unico dentro del ZIP. `normalize()` produce `${titulo}.${ext}`, asi que dos
+ *  requisitos con el mismo titulo daban el mismo nombre y JSZip sobrescribia en
+ *  silencio: un documento desaparecia del expediente sin ningun error, que en
+ *  documentacion legal es perdida de datos. */
+export const uniqueZipName = (usados: Set<string>, name: string) => {
+  if (!usados.has(name)) { usados.add(name); return name; }
+  const punto = name.lastIndexOf(".");
+  const base = punto === -1 ? name : name.slice(0, punto);
+  const ext = punto === -1 ? "" : name.slice(punto);
+  let n = 2;
+  while (usados.has(`${base}-${n}${ext}`)) n++;
+  const unico = `${base}-${n}${ext}`;
+  usados.add(unico);
+  return unico;
+};
+export async function downloadHiringZip(companyId: number, processId: number, userId: number) {
+  const detail = await getHiringDetail(companyId, processId);
+  if (!detail) throw new Error("Hiring process not found");
+  // Se comprueba contra la base, sin tocar el bucket: si el expediente no cabe, el
+  // analista recibe un error explicable en vez de que el contenedor muera por OOM y
+  // se lleve por delante a todas las empresas. Ver MAX_ZIP_BYTES.
+  const totalBytes = detail.documents.reduce((suma, item) => suma + (item.sizeBytes || 0), 0);
+  if (totalBytes > MAX_ZIP_BYTES) throw new Error(`El expediente pesa ${Math.round(totalBytes / 1048576)} MB y supera el limite de ${Math.round(MAX_ZIP_BYTES / 1048576)} MB de la descarga comprimida. Descarga los documentos por separado.`);
+  const usados = new Set<string>();
+  const files: Array<{ name: string; bytes: Uint8Array }> = [];
+  for (const document of detail.documents) {
+    // `storageGetBytes` y no firmar + fetch: cuesta lo mismo en red, pero no crea una
+    // URL firmada que pueda acabar en un log y hereda los timeouts del cliente S3 en
+    // vez de un `fetch()` sin ninguno, que podia colgar la peticion indefinidamente.
+    let bytes: Uint8Array;
+    try {
+      bytes = await storageGetBytes(document.fileKey);
+    } catch {
+      // El detalle real ya quedo en el log del servidor; aqui interesa cual fallo.
+      throw new Error(`No se pudo descargar ${document.normalizedName}`);
+    }
+    files.push({ name: uniqueZipName(usados, document.normalizedName), bytes });
+  }
+  const archive = await createZipArchive(files);
+  await audit(companyId, "hiring_archive_downloaded", { processId, documentCount: detail.documents.length }, userId);
+  await activity(companyId, processId, "archive_downloaded", "analyst", userId, { documentCount: detail.documents.length });
+  return { filename: `${(detail.candidate?.fullName || "candidato").replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ_-]/g, "_")}_expediente.zip`, base64: archive.toString("base64"), documentCount: detail.documents.length };
+}
 
 export async function getDashboardStats(companyId: number) {
   const db = await getDb();

@@ -68,7 +68,7 @@ client/src/pages/*.tsx
 | `server/authorization.ts`        | Matrices RBAC (`ROLE_PERMISSIONS`, `INVITABLE_ROLES`) y los asserts.                                                                                                                                                                                                                  |
 | `server/db.ts`                   | Singleton de drizzle + helpers de consulta.                                                                                                                                                                                                                                           |
 | `drizzle/schema.ts`              | **Fuente de verdad** del esquema _y_ de los tipos, incluido `RoleKey`. No hay `database.types.ts` que regenerar: editar este archivo actualiza ambos lados.                                                                                                                           |
-| `shared/extensions.ts`           | Puertos (`AIProvider`, `LlmProvider`, `DocumentStoragePort`, `TenantContext`).                                                                                                                                                                                                        |
+| `shared/extensions.ts`           | Puertos (`AIProvider`, `LlmProvider`, `TenantContext`). No hay puerto de almacenamiento: `server/storage.ts` habla S3 directamente y el proveedor se elige con variables de entorno.                                                                                                                                                                                                        |
 | `client/src/components/ui/`      | shadcn/ui — no editar a mano.                                                                                                                                                                                                                                                         |
 | `server/_core/`, `shared/_core/` | Andamiaje vendido de la plantilla Manus. `heartbeat.ts`, `map.ts`, `imageGeneration.ts`, `voiceTranscription.ts` no se usan. **No tomarlo como convencion del proyecto.** Excepcion: `app.ts`, `dev.ts`, `index.ts` y `static.ts` son el arranque propio del proyecto (ver Comandos). |
 
@@ -148,9 +148,15 @@ Otros detalles:
   `status: "not_configured"`.
 - Las procedures de IA llevan `mode: "demo" | "real"`. Los providers viven detras de los puertos de
   `shared/extensions.ts`: **nunca importar un SDK de IA dentro de un modulo de dominio**.
-- Descargas solo por `hiring.documentUrl` + URL firmada, tras `assertRole` + `assertCompanyScope`. El
-  proxy publico `/manus-storage/{key}` se elimino por filtrar documentos personales (`e79bb3a`): no
-  reintroducirlo.
+- Descargas solo por `hiring.documentUrl` + URL firmada (300 s), tras `assertRole` +
+  `assertCompanyScope`. El proxy publico `/manus-storage/{key}` se elimino por filtrar documentos
+  personales (`e79bb3a`): no reintroducirlo. Ademas de no validar permisos, servia los documentos
+  desde el dominio de la aplicacion; las URLs firmadas viven en el host del proveedor, y esa
+  separacion de origen es lo que impide que un PDF malicioso alcance la cookie de sesion.
+- `server/storage.ts` es todo el almacenamiento: S3 generico sobre `@aws-sdk/client-s3`, valido para
+  R2, B2, S3 o MinIO segun las `STORAGE_S3_*`. Carga el SDK con `await import()` porque importar el
+  modulo no debe tener efectos ni pagar ~2.5 s de arranque, y envuelve todo error del proveedor: el
+  `message` del SDK lleva bucket y endpoint, y `toTrpc()` lo entregaria a una procedure publica.
 - `docs/ARCHITECTURE.md` es de la Fase 1 y **sigue desactualizado en autenticacion**: describe el
   login como Manus OAuth, retirado en `69d9888`. Su guia de multi-tenancy si es fiable; la
   recomendacion de fijar `companyId = 4` que tenia ya se corrigio.
@@ -159,7 +165,13 @@ Otros detalles:
 
 Declaradas en `.env.example` y centralizadas en `server/_core/env.ts`: `NODE_ENV`, `PORT`,
 `DATABASE_URL` (MySQL/TiDB; local `mysql://root:root@localhost:3306/people_ai`), `JWT_SECRET`,
-`BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY`, `REMINDER_COOLDOWN_HOURS`.
+`BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (catalogo LLM de `_core/llm.ts`, solo el modo IA
+"real" -- pese al nombre no tienen nada que ver con el almacenamiento), `REMINDER_COOLDOWN_HOURS`, y
+las `STORAGE_S3_*` (`ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`,
+`FORCE_PATH_STYLE`) del almacenamiento de documentos. Sin estas ultimas el servidor arranca igual y
+solo cae el portal del candidato; `logStorageEnvStatus()` lo anuncia en el log de arranque, y
+`server/deploy.contract.test.ts` verifica que toda variable leida en `server/` este declarada en
+`render.yaml` -- el hueco por el que el almacenamiento llego roto a produccion.
 
 Hay deriva: el `.env` local usa ademas `VITE_APP_ID` y `OWNER_OPEN_ID`, que no estan en
 `.env.example`. Rotar `JWT_SECRET` cierra la sesion de todo el mundo.

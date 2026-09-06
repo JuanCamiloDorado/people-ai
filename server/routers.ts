@@ -9,7 +9,7 @@ import { getAppProfile, listCompanies, listMemberships, listDepartmentsByCompany
 import { getSessionCookieOptions } from "./_core/cookies";
 import { demoHRAssistant } from "./aiDemo";
 import { analyzeHiringDocuments, askPeopleAi, availableAiModels, getHiringAiSummary, listAiConversations, listAiFindings, listAiInsights, listAiRuns, reviewAiFinding, updateAiInsight } from "./aiDomain";
-import { assignDefaultTemplate, assignTemplateToPosition, createHiring, createPosition, createTemplate, deletePosition, deleteTemplate, generateLink, getDashboardStats, getDocumentUrl, getHiringDetail, getLinkState, getMasterStandardTemplate, getPortal, getPortalDocumentUrl, listActivities, listCommunications, listHiring, listPositions, listTemplates, listNotifications, removePortalDocument, revokeLink, prepareCandidateEmail, prepareCandidateReminder, markCommunicationSent, downloadHiringZip, listExpiringLinks, requestCandidateOtp, submitPortal, updateHiringDeadline, updateMasterStandardTemplate, updateTemplateName, verifyCandidateOtp, updateRequirement, updateTemplate, uploadPortalDocument } from "./hrDomain";
+import { MAX_FILE_BYTES, assignDefaultTemplate, assignTemplateToPosition, createHiring, createPosition, createTemplate, deletePosition, deleteTemplate, generateLink, getDashboardStats, getDocumentUrl, getHiringDetail, getLinkState, getMasterStandardTemplate, getPortal, getPortalDocumentUrl, listActivities, listCommunications, listHiring, listPositions, listTemplates, listNotifications, removePortalDocument, revokeLink, prepareCandidateEmail, prepareCandidateReminder, markCommunicationSent, downloadHiringZip, listExpiringLinks, requestCandidateOtp, submitPortal, updateHiringDeadline, updateMasterStandardTemplate, updateTemplateName, verifyCandidateOtp, updateRequirement, updateTemplate, uploadPortalDocument } from "./hrDomain";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 
@@ -235,7 +235,14 @@ export const appRouter = router({
   }),
   candidatePortal: router({
     get: publicProcedure.input(z.object({ token: z.string().min(20).max(200) })).query(({ input }) => getPortal(input.token)),
-    upload: publicProcedure.input(z.object({ token: z.string().min(20).max(200), requirementId: z.number().int().positive(), originalName: z.string().min(1).max(255), mimeType: z.string(), base64: z.string().min(1) })).mutation(({ input }) => uploadPortalDocument(input.token, input.requirementId, input.originalName, input.mimeType, Buffer.from(input.base64, "base64"))),
+    // Topes en el input, no solo en el dominio: esta procedure es publica y sin ellos
+    // `base64` aceptaba cualquier longitud, asi que la unica barrera era el limite de
+    // 20mb del body parser (_core/app.ts) y un anonimo podia obligar a Express a
+    // bufferizar eso en cada peticion. 4/3 es el inflado del base64 sobre MAX_FILE_BYTES
+    // y el margen cubre el padding, asi que el tope sigue a la constante si cambia. El
+    // limite del body parser sigue haciendo falta: zod corre DESPUES de leer el cuerpo.
+    // `mimeType` se acota a los 120 de su columna en drizzle/schema.ts.
+    upload: publicProcedure.input(z.object({ token: z.string().min(20).max(200), requirementId: z.number().int().positive(), originalName: z.string().min(1).max(255), mimeType: z.string().min(1).max(120), base64: z.string().min(1).max(Math.ceil(MAX_FILE_BYTES / 3) * 4 + 16) })).mutation(({ input }) => uploadPortalDocument(input.token, input.requirementId, input.originalName, input.mimeType, Buffer.from(input.base64, "base64"))),
     submit: publicProcedure.input(z.object({ token: z.string().min(20).max(200) })).mutation(({ input }) => submitPortal(input.token)),
     remove: publicProcedure.input(z.object({ token: z.string().min(20).max(200), requirementId: z.number().int().positive() })).mutation(({ input }) => removePortalDocument(input.token, input.requirementId)),
     documentUrl: publicProcedure.input(z.object({ token: z.string().min(20).max(200), requirementId: z.number().int().positive() })).query(({ input }) => getPortalDocumentUrl(input.token, input.requirementId)),

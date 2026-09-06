@@ -16,6 +16,12 @@ vi.mock("./_core/env", () => ({
     isProduction: false,
     forgeApiUrl: "",
     forgeApiKey: "",
+    storageEndpoint: "",
+    storageRegion: "auto",
+    storageBucket: "",
+    storageAccessKeyId: "",
+    storageSecretAccessKey: "",
+    storageForcePathStyle: false,
   },
 }));
 

@@ -47,7 +47,7 @@ La validación del navegador autenticado y la interacción con objetos reales de
 
 ## Configuración externa y límites
 
-El modo DEMO funciona sin credenciales adicionales y debe mantenerse para demostraciones. El modo real requiere que estén disponibles `BUILT_IN_FORGE_API_URL` y `BUILT_IN_FORGE_API_KEY`, además de acceso al catálogo LLM incorporado y permisos de URLs firmadas. El proveedor real procesa archivos privados mediante el proxy de storage; una organización debe revisar retención, residencia, consentimiento y políticas del proveedor antes de activarlo en producción.
+El modo DEMO funciona sin credenciales adicionales y debe mantenerse para demostraciones. El modo real requiere que estén disponibles `BUILT_IN_FORGE_API_URL` y `BUILT_IN_FORGE_API_KEY` (catálogo LLM incorporado) y, por separado, las `STORAGE_S3_*` que permiten firmar las URLs de los documentos. El proveedor real descarga archivos privados desde esas URLs firmadas, que se emiten con 900 s de vida porque las consume el LLM y no un navegador; una organización debe revisar retención, residencia, consentimiento y políticas del proveedor antes de activarlo en producción.
 
 La utilidad PDF puede separar bytes por página, pero esta iteración no crea automáticamente nuevos expedientes derivados ni reemplaza el original en storage. La extracción OCR especializada, el versionado de páginas, el enriquecimiento de Knowledge Base y las acciones operativas automáticas requieren una fase posterior. WhatsApp, Microsoft Teams y otros canales siguen desactivados.
 

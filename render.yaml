@@ -34,3 +34,24 @@ services:
         sync: false
       - key: REMINDER_COOLDOWN_HOURS
         value: "4"
+      # Almacenamiento S3-compatible de los documentos del portal del candidato.
+      # Cualquier proveedor con API S3 sirve (Cloudflare R2, Backblaze B2, AWS S3):
+      # el codigo no tiene ninguna rama por proveedor. Endpoint y bucket identifican
+      # la cuenta y cambian entre entornos, y las dos claves son secretos, asi que los
+      # cuatro van con `sync: false`. Region y path-style si viajan en git: no revelan
+      # nada. Sin estas variables el servicio arranca igual y solo cae el portal del
+      # candidato, pero el log de arranque lo dice (`logStorageEnvStatus`).
+      - key: STORAGE_S3_ENDPOINT
+        sync: false
+      # "auto" es lo que exige R2. Con AWS S3 real va la region del bucket.
+      - key: STORAGE_S3_REGION
+        value: auto
+      - key: STORAGE_S3_BUCKET
+        sync: false
+      - key: STORAGE_S3_ACCESS_KEY_ID
+        sync: false
+      - key: STORAGE_S3_SECRET_ACCESS_KEY
+        sync: false
+      # "true" solo hace falta con MinIO. R2, B2 y S3 funcionan con el valor por defecto.
+      - key: STORAGE_S3_FORCE_PATH_STYLE
+        value: "false"

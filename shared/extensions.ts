@@ -57,21 +57,17 @@ export interface IntegrationAdapter {
   health(tenant: TenantContext): Promise<{ status: "connected" | "disconnected" | "error"; checkedAt: number }>;
 }
 
-export type DocumentMetadata = {
-  companyId: number;
-  ownerUserId?: number;
-  fileKey: string;
-  fileName: string;
-  mimeType: string;
-  sizeBytes: number;
-  checksum?: string;
-};
-
-export interface DocumentStoragePort {
-  put(metadata: Omit<DocumentMetadata, "fileKey">, bytes: Uint8Array): Promise<DocumentMetadata>;
-  getUrl(tenant: TenantContext, fileKey: string): Promise<string>;
-  remove(tenant: TenantContext, fileKey: string): Promise<void>;
-}
+// Aqui vivia `DocumentStoragePort`. Se borro: nunca tuvo implementacion ni un solo
+// import en runtime, y su firma mentia en los tres metodos (`put` recibia metadata en
+// vez de una clave, `getUrl` pedia un TenantContext que el almacenamiento no usa ni
+// debe usar -- la autorizacion vive en routers.ts -- y `remove` no existia). Una
+// interfaz muerta con la firma equivocada es documentacion activa y falsa.
+//
+// Y no hacia falta reemplazarla: los otros puertos de este archivo existen porque hay
+// dos implementaciones y un `mode: "demo" | "real"` que elige entre ellas. El
+// almacenamiento tiene una sola (`server/storage.ts`, S3), y la variabilidad de
+// proveedor la absorben las variables STORAGE_S3_*. Un puerto con un unico
+// implementador es indireccion sin beneficio.
 
 export type AiCapability = "hr-assistant" | "onboarding" | "payroll-intelligence" | "people-analytics" | "talent-intelligence";
 export type FutureModuleStatus = "planned" | "available";
