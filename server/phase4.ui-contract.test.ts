@@ -39,4 +39,21 @@ describe("Fase 4A UI contracts", () => {
     expect(source).not.toContain('"142"');
     expect(source).not.toContain("Consultas atendidas · demo");
   });
+
+  it("garantiza que CandidatePortalPage maneja estado de carga con skeleton sin flash de enlace expirado", () => {
+    const source = readClient("CandidatePortalPage.tsx");
+    expect(source).toContain("CandidatePortalSkeleton");
+    expect(source).toContain("isLoadingPortal");
+    expect(source).toContain("portal.isLoading");
+    expect(source).toContain("No pudimos cargar la información");
+    expect(source).toContain("Este enlace ya no está disponible");
+    // Verifica que no se verifique !portal.data antes de verificar el estado de carga
+    const loadingIndex = source.indexOf("isLoadingPortal");
+    const skeletonIndex = source.indexOf("<CandidatePortalSkeleton");
+    const expiredIndex = source.indexOf("Este enlace ya no está disponible");
+    expect(loadingIndex).toBeGreaterThan(-1);
+    expect(skeletonIndex).toBeGreaterThan(-1);
+    expect(skeletonIndex).toBeLessThan(expiredIndex);
+  });
 });
+
