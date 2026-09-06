@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import JSZip from "jszip";
 import { buildManualCommunicationRecord, communicationAuditAction, createZipArchive, buildCandidateEmail, hashOtp, isExpiringWithin, isLinkUsable, isOtpUsable, isReminderAllowed, manualCommunicationEvents } from "./hrDomain";
 import { buildMailtoUrl, prepareMailtoEmail } from "./emailService";
 
@@ -26,6 +27,25 @@ describe("Fase 3.1 - expediente y enlaces", () => {
   it("creates a ZIP with the normalized document entries", async () => {
     const archive = await createZipArchive([{ name: "cedula.pdf", bytes: new TextEncoder().encode("%PDF-demo") }, { name: "foto.png", bytes: new Uint8Array([137, 80, 78, 71]) }]);
     expect(archive.length).toBeGreaterThan(40);
+  });
+  it("mete el expediente en una carpeta cuando el nombre lleva la ruta", async () => {
+    // `downloadHiringZip` prefija cada documento con `${carpeta}/`. Quien crea el
+    // directorio a partir de esa barra es JSZip (`createFolders`, activo por defecto): si
+    // se desactivara, los documentos volverian a la raiz y descomprimir dos expedientes en
+    // el mismo sitio los mezclaria sin que nada lo detectase.
+    const carpeta = "CAMILO DORADO - 1098765432";
+    const archive = await createZipArchive([
+      { name: `${carpeta}/Cédula de Ciudadanía.pdf`, bytes: new TextEncoder().encode("%PDF-demo") },
+      { name: `${carpeta}/Hoja de vida.pdf`, bytes: new TextEncoder().encode("%PDF-otro") },
+    ]);
+    const leido = await JSZip.loadAsync(archive);
+    expect(leido.files[`${carpeta}/`]?.dir).toBe(true);
+    expect(Object.values(leido.files).filter((entrada) => !entrada.dir).map((entrada) => entrada.name)).toEqual([
+      `${carpeta}/Cédula de Ciudadanía.pdf`,
+      `${carpeta}/Hoja de vida.pdf`,
+    ]);
+    // Los acentos sobreviven al viaje: JSZip marca el nombre como UTF-8.
+    expect(await leido.file(`${carpeta}/Cédula de Ciudadanía.pdf`)!.async("string")).toBe("%PDF-demo");
   });
   it("distinguishes active, revoked and expired links", () => {
     const now = Date.now();
