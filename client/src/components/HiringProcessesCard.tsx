@@ -14,6 +14,27 @@ import { cn } from "@/lib/utils";
 import { getHiringStatusInfo } from "@/lib/statusFormatters";
 import { DIRECCION_INICIAL, ordenarProcesos, type OrdenColumna } from "@/lib/hiringSort";
 
+/** Tipografia de la fila de cabeceras, en una constante porque tiene que ir a la vez en el
+ *  contenedor y en cada <button> ordenable.
+ *
+ *  El contenedor se la pasaba a todas por herencia mientras fueron <span>. En cuanto cinco
+ *  pasaron a ser botones dejo de llegarles: los navegadores resetean la tipografia de los
+ *  controles de formulario en su hoja de estilos -- `text-transform: none` incluido --, asi
+ *  que las cinco columnas ordenables quedaron en caja mixta y a otro tamanio al lado de un
+ *  "ACCIONES" que si seguia en versales.
+ *
+ *  11px y no 10: en versales y con tracking, por debajo de 11 cuesta leerlas.
+ *
+ *  `slate-600` y no `slate-400`, que es lo que habia: sobre blanco, slate-400 da 2,6:1 de
+ *  contraste -- por debajo del 4,5:1 que la WCAG pide para texto normal -- y slate-600 da
+ *  7,6:1. Un paso mas oscuro de lo que pediria una etiqueta suelta porque estas ya no lo
+ *  son: desde que ordenan son controles, y un control con el contraste justo para pasar no
+ *  invita a pulsarlo. Pero solo un paso: `slate-700` queda reservado a la columna activa, y
+ *  mas oscuro que eso haria que los rotulos compitieran con los nombres de los candidatos,
+ *  que es lo que la vista tiene que recorrer. Los 11px en versales y con tracking ya los
+ *  separan de sobra de los 14px de los datos. */
+const CABECERA = "text-[11px] font-semibold uppercase tracking-wider text-slate-600";
+
 /** Cabecera pulsable de una columna.
  *
  *  Vive FUERA del componente a proposito: definida dentro seria un tipo nuevo en cada
@@ -35,8 +56,11 @@ function CabeceraOrdenable({ etiqueta, activa, direccion, onClick }: {
       // Hasta que la semantica se arregle, el estado va en el nombre accesible del boton.
       aria-label={`Ordenar por ${etiqueta.toLowerCase()}${activa ? (direccion === "asc" ? ", ascendente" : ", descendente") : ""}`}
       className={cn(
-        "group flex items-center gap-1 rounded-sm text-left transition-colors hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
-        activa && "text-slate-600"
+        CABECERA,
+        "group flex items-center gap-1 rounded-sm text-left transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        // La columna activa se distingue por color ademas de por la flecha: con la base ya
+        // en slate-600, slate-700 se quedaria corto y no se leeria como "esta es".
+        activa && "text-slate-900"
       )}
     >
       {etiqueta}
@@ -188,7 +212,7 @@ export default function HiringProcessesCard({
               ordenar. Es la misma carencia que ya tenian las etiquetas de columna -- abajo
               de 640px la fila se apila sin decir que es cada valor -- y arreglarla pide
               rehacer la fila en modo tarjeta, que es otro trabajo. */}
-          <div className="hidden grid-cols-[1.4fr_1fr_0.8fr_0.8fr_0.8fr_76px] gap-3 border-b px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400 sm:grid">
+          <div className={cn("hidden grid-cols-[1.4fr_1fr_0.8fr_0.8fr_0.8fr_76px] gap-3 border-b px-5 py-3 sm:grid", CABECERA)}>
             <CabeceraOrdenable etiqueta="Candidato" activa={orden === "candidateName"} direccion={direccion} onClick={() => ordenarPor("candidateName")} />
             <CabeceraOrdenable etiqueta="Cargo" activa={orden === "positionName"} direccion={direccion} onClick={() => ordenarPor("positionName")} />
             <CabeceraOrdenable etiqueta="Progreso" activa={orden === "progress"} direccion={direccion} onClick={() => ordenarPor("progress")} />
