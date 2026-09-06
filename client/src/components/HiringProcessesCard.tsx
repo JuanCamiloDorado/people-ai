@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowRight, Plus, Trash2, UserRound } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, ArrowUpDown, Plus, Trash2, UserRound } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
@@ -12,6 +12,38 @@ import { trpc } from "@/lib/trpc";
 import { useCompanyId } from "@/hooks/useCompanyId";
 import { cn } from "@/lib/utils";
 import { getHiringStatusInfo } from "@/lib/statusFormatters";
+import { DIRECCION_INICIAL, ordenarProcesos, type OrdenColumna } from "@/lib/hiringSort";
+
+/** Cabecera pulsable de una columna.
+ *
+ *  Vive FUERA del componente a proposito: definida dentro seria un tipo nuevo en cada
+ *  render, React desmontaria y volveria a montar el <button> justo al ordenar, y el foco
+ *  del teclado se perderia despues de cada pulsacion -- que es precisamente cuando alguien
+ *  que navega con teclado quiere seguir en la misma cabecera para invertir el orden. */
+function CabeceraOrdenable({ etiqueta, activa, direccion, onClick }: {
+  etiqueta: string;
+  activa: boolean;
+  direccion: "asc" | "desc";
+  onClick: () => void;
+}) {
+  const Icono = !activa ? ArrowUpDown : direccion === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      // La tabla son <div>, no un <table>, asi que `aria-sort` no llegaria a anunciarse.
+      // Hasta que la semantica se arregle, el estado va en el nombre accesible del boton.
+      aria-label={`Ordenar por ${etiqueta.toLowerCase()}${activa ? (direccion === "asc" ? ", ascendente" : ", descendente") : ""}`}
+      className={cn(
+        "group flex items-center gap-1 rounded-sm text-left transition-colors hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        activa && "text-slate-600"
+      )}
+    >
+      {etiqueta}
+      <Icono className={cn("h-3 w-3 transition-opacity", !activa && "opacity-0 group-hover:opacity-60")} />
+    </button>
+  );
+}
 
 /** Listado de procesos de contratacion: la MISMA tabla en el inicio (`HRDashboard`) y en
  *  `/hr/contrataciones` (`HiringPage`).
@@ -44,7 +76,15 @@ export default function HiringProcessesCard({
   const hiring = trpc.hiring.list.useQuery({ companyId }, { enabled: ready });
   const positions = trpc.positions.list.useQuery({ companyId }, { enabled: ready });
   const [statusFilter, setStatusFilter] = useState("all"); const [positionFilter, setPositionFilter] = useState("all");
+  // Arranca igual que venia el servidor (`orderBy(desc(createdAt))` en `listHiring`), asi
+  // que hasta que alguien pulse una cabecera no cambia nada de lo que ya se veia.
+  const [orden, setOrden] = useState<OrdenColumna>("createdAt"); const [direccion, setDireccion] = useState<"asc" | "desc">("desc");
   const [processToDelete, setProcessToDelete] = useState<{ id: number; candidateName: string } | null>(null);
+  const ordenarPor = (campo: OrdenColumna) => {
+    if (campo === orden) { setDireccion(d => (d === "asc" ? "desc" : "asc")); return; }
+    setOrden(campo);
+    setDireccion(DIRECCION_INICIAL[campo]);
+  };
 
   // El borrado es fisico y arrastra tablas que alimentan otras cuatro vistas, asi que hay
   // que invalidar todas: `hr.stats` son las tarjetas del dashboard (se calculan con el
@@ -64,7 +104,8 @@ export default function HiringProcessesCard({
     onError: error => toast.error(error.message || "No fue posible eliminar la contratación"),
   });
 
-  const rows = hiring.data?.filter(row => (statusFilter === "all" || row.status === statusFilter) && (positionFilter === "all" || String(row.positionId) === positionFilter)) || [];
+  const filtradas = hiring.data?.filter(row => (statusFilter === "all" || row.status === statusFilter) && (positionFilter === "all" || String(row.positionId) === positionFilter)) || [];
+  const rows = ordenarProcesos(filtradas, orden, direccion);
   // El subtitulo decia "N proceso(s) en este tenant.": "tenant" es jerga de programador
   // delante del usuario, el "(s)" es un plural perezoso y el numero era el de las filas ya
   // filtradas mientras el texto sugeria el total de la empresa. Con filtro puesto ahora se
@@ -143,12 +184,20 @@ export default function HiringProcessesCard({
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          {/* La cabecera solo existe a partir de `sm`, asi que en movil no hay como
+              ordenar. Es la misma carencia que ya tenian las etiquetas de columna -- abajo
+              de 640px la fila se apila sin decir que es cada valor -- y arreglarla pide
+              rehacer la fila en modo tarjeta, que es otro trabajo. */}
           <div className="hidden grid-cols-[1.4fr_1fr_0.8fr_0.8fr_0.8fr_76px] gap-3 border-b px-5 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400 sm:grid">
-            <span>Candidato</span>
-            <span>Cargo</span>
-            <span>Progreso</span>
-            <span>Estado</span>
-            <span>Fecha</span>
+            <CabeceraOrdenable etiqueta="Candidato" activa={orden === "candidateName"} direccion={direccion} onClick={() => ordenarPor("candidateName")} />
+            <CabeceraOrdenable etiqueta="Cargo" activa={orden === "positionName"} direccion={direccion} onClick={() => ordenarPor("positionName")} />
+            <CabeceraOrdenable etiqueta="Progreso" activa={orden === "progress"} direccion={direccion} onClick={() => ordenarPor("progress")} />
+            <CabeceraOrdenable etiqueta="Estado" activa={orden === "status"} direccion={direccion} onClick={() => ordenarPor("status")} />
+            {/* Ordena por la fecha de creacion, que es el valor grande de la celda y el que
+                nombra la columna. La linea "Límite:" que va debajo es una segunda fecha, y
+                una sola cabecera no puede ordenar honestamente por las dos: para eso hace
+                falta separarlas en dos columnas. */}
+            <CabeceraOrdenable etiqueta="Fecha" activa={orden === "createdAt"} direccion={direccion} onClick={() => ordenarPor("createdAt")} />
             <span className="text-right">Acciones</span>
           </div>
           {cargando ? (
